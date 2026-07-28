@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Keep .spec file tracked in Git
+!My Downloader.spec
