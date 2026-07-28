@@ -4,7 +4,7 @@
 
   <img src="assets/icon.png" width="120" height="120" alt="App Icon">
 
-  # Media Downloader CLI
+  # Media Downloader
   
   [![Latest Release](https://img.shields.io/github/v/release/Y2m777a5/My-Downloader?color=blue&label=Latest%20Release)](https://github.com/Y2m777a5/My-Downloader/releases/latest)
 
