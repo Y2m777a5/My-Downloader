@@ -7,6 +7,14 @@ Requires:
 
 Run with:  python downloader.py
 """
+# --- CONFIGURATION ---
+VERSION = "2.2.4.8"
+CURRENT_VERSION = VERSION
+REPO_OWNER = "Y2m777a5"
+REPO_NAME = "My-Downloader"
+
+# To download the file from GitHub Releases:
+GITHUB_EXE_FILENAME = "Media_Downloader.exe"
 
 import os
 import sys
