@@ -2,19 +2,17 @@
 My Downloader (Python port of the original .bat script)
 
 Requires:
-  - bin\\yt-dlp.exe  (or bin/yt-dlp on non-Windows)
-  - bin\\ffmpeg.exe, ffprobe.exe, ffplay.exe (optional, used for merging/audio extraction)
+  - bin\yt-dlp.exe  (or bin/yt-dlp on non-Windows)
+  - bin\ffmpeg.exe, ffprobe.exe, ffplay.exe (optional, used for merging/audio extraction)
 
 Run with:  python downloader.py
 """
-# --- CONFIGURATION ---
-VERSION = "2.2.4.8"
+# --- CONFIGURATIONS FOR APP & REPOSITORY ---
+VERSION = "2.2.6.0"
 CURRENT_VERSION = VERSION
 REPO_OWNER = "Y2m777a5"
-REPO_NAME = "My-Downloader"
-
-# To download the file from GitHub Releases:
-GITHUB_EXE_FILENAME = "Media_Downloader.exe"
+REPO_NAME = "My-Downloader"       
+GITHUB_EXE_FILENAME = "My Downloader.exe"
 
 import os
 import sys
@@ -23,7 +21,9 @@ import shutil
 import zipfile
 import tempfile
 import subprocess
+import json
 import urllib.request
+import urllib.parse
 from pathlib import Path
 
 try:
@@ -48,19 +48,19 @@ def get_base_dir():
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
 
-#Colors
+# Colors
 WHITE = "\033[97m"
 RED = "\033[91m"
 YELLOW = "\033[93m"
 CYAN = "\033[96m"
 GREEN = "\033[38;2;0;254;0m"
 RESET = "\033[0m"
-
+DEFAULT_COLOR= "\033[38;2;238;128;32m"
 
 BASE_DIR = get_base_dir()
 BIN_DIR = BASE_DIR / "bin"
 OUT_DIR = BASE_DIR / "Downloads"
-YTDLP = BIN_DIR / "yt-dlp.exe"
+YTDLP = BIN_DIR / ("yt-dlp.exe" if os.name == "nt" else "yt-dlp")
 
 OUT_DIR.mkdir(exist_ok=True)
 BIN_DIR.mkdir(exist_ok=True)
@@ -68,16 +68,6 @@ BIN_DIR.mkdir(exist_ok=True)
 FULL = "█" * 25
 EMPTY = "░" * 25
 
-# Bright White ANSI Code
-WHITE = "\033[97m"
-
-def main():
-    if os.name == "nt":
-        os.system("title My Downloader")
-    setup_console()
-    
-    # Force text to bright white right from the start
-    print(WHITE, end="")
 
 def setup_console():
     """Fix the console to a known size and move the window to screen center."""
@@ -201,7 +191,8 @@ def print_header(title, url=None):
     cblock("\n".join(lines))
     print()
     if url:
-            print(f"Video URL: {url}")
+        print(f"Video URL: {url}")
+
 
 def print_logo():
     logo = r"""
@@ -214,11 +205,12 @@ def print_logo():
     """
     cblock(f"\033[38;2;238;128;32m{logo}{WHITE}")
 
+
 def print_menu():
     clear()
     cleanup_partials()
     print()
-    print_logo() # <--- Displays your chosen logo here
+    print_logo()
     print()
     menu_lines = [
         "====================================================",
@@ -228,15 +220,14 @@ def print_menu():
         " [2] Download Video (Best Quality - MP4)",
         " [3] Download Audio Only (MP3)",
         " [4] Download Custom Format / List Formats",
-        " [5] Install / Update yt-dlp",
-        " [6] Install / Update FFmpeg",
-        " [7] Exit",
+        " [5] Install / Update",
+        " [6] Exit",
         "====================================================",
     ]
     cblock("\n".join(menu_lines))
     print()
     imp_lines = [
-        "# First-time users: Choose option 5 & 6.",
+        "# First-time users: Choose option 5",
         "# N.B: Keep the app in a folder.",
         "# WARNING: Do not delete the 'bin' folder.",
     ]
@@ -245,7 +236,20 @@ def print_menu():
     print(f"\n\n{WHITE}")
 
 
+def ensure_ytdlp_exists():
+    """Checks if yt-dlp exists before running any download commands."""
+    if not YTDLP.exists():
+        print(f"{RED}[ERROR] yt-dlp was not found in the 'bin' directory!{WHITE}")
+        print(f"{YELLOW}[INFO] Please run Option [5] (Install / Update) first.{WHITE}\n")
+        input("Press Enter to return to main menu...")
+        return False
+    return True
+
+
 def download_with_bar(url, title, extra_args):
+    if not ensure_ytdlp_exists():
+        return
+
     log_path = Path(tempfile.gettempdir()) / "ytdlp_progress.txt"
     if log_path.exists():
         log_path.unlink()
@@ -394,6 +398,9 @@ def action_audio():
 
 
 def action_custom():
+    if not ensure_ytdlp_exists():
+        return
+
     clear()
     print_header("CUSTOM FORMAT / RESOLUTION")
     url = input("Enter Video URL: ").strip()
@@ -417,26 +424,135 @@ def action_custom():
                        ["-f", fmt, "--merge-output-format", "mp4"])
 
 
+def get_local_ytdlp_version():
+    if not YTDLP.exists():
+        return "[File not found: select to install]"
+    try:
+        res = subprocess.run([str(YTDLP), "--version"], capture_output=True, text=True, timeout=3)
+        return res.stdout.strip() if res.returncode == 0 else "installed"
+    except Exception:
+        return "installed"
+
+
+def get_local_ffmpeg_version():
+    ffmpeg_exe = BIN_DIR / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+    if not ffmpeg_exe.exists():
+        return "[File not found: select to install]"
+    try:
+        res = subprocess.run([str(ffmpeg_exe), "-version"], capture_output=True, text=True, timeout=3)
+        if res.returncode == 0:
+            first_line = res.stdout.splitlines()[0] if res.stdout else ""
+            parts = first_line.split()
+            # Extracts the version token
+            if len(parts) >= 3 and parts[1].lower() == "version":
+                return parts[2].split("-")[0]
+            return "installed"
+        return "installed"
+    except Exception:
+        return "installed"
+
+
+def fetch_latest_release_tag(repo_path):
+    """Fetches the latest release tag from GitHub API."""
+    url = f"https://api.github.com/repos/{repo_path}/releases/latest"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode())
+            return data.get("tag_name", "Available")
+    except Exception:
+        return "Unavailable"
+
+
+def format_update_status(local_ver, latest_tag):
+    """Shows latest_tag if an update is available; otherwise shows 'Unavailable'."""
+    if latest_tag == "Unavailable":
+        return "Unavailable"
+
+    # Clean leading 'v' and whitespace for accurate comparison
+    clean_local = local_ver.lstrip("v").strip()
+    clean_latest = latest_tag.lstrip("v").strip()
+
+    # If versions match, no update is available -> show "Unavailable"
+    if clean_local == clean_latest:
+        return "Unavailable"
+
+    # If component is missing or version differs -> show new version tag
+    return latest_tag
+
+
+def action_install_update_menu():
+    while True:
+        clear()
+        print_header("Install / Update")
+        
+        yt_local = get_local_ytdlp_version()
+        ff_local = get_local_ffmpeg_version()
+        app_local = CURRENT_VERSION
+        
+        yt_latest = fetch_latest_release_tag("yt-dlp/yt-dlp")
+        ff_latest = fetch_latest_release_tag("GyanD/codexffmpeg")
+        app_latest = fetch_latest_release_tag(f"{REPO_OWNER}/{REPO_NAME}")
+
+        # Status check logic
+        yt_status = format_update_status(yt_local, yt_latest)
+        ff_status = format_update_status(ff_local, ff_latest)
+        app_status = format_update_status(app_local, app_latest)
+
+        menu_content = (
+            f" Current versions                  Latest versions\n"
+            f"------------------                ------------------\n"
+            f"[1] yt-dlp                          ({yt_status})\n"
+            f"    {yt_local:<24}\n"
+            f"[2] FFmpeg                          ({ff_status})\n"
+            f"    {ff_local:<24}\n"
+            f"[3] My Downloader                   ({app_status})\n"
+            f"    v{app_local:<21}\n"
+            f"===================================================\n"
+            f"        Select [0] to go back to main menu"
+        )
+        
+        cblock(menu_content)
+        print()
+        
+        choice = input("        Select an option (0-3): ").strip()
+        
+        if choice == "0":
+            break
+        elif choice == "1":
+            action_update_ytdlp()
+        elif choice == "2":
+            action_update_ffmpeg()
+        elif choice == "3":
+            action_update()
+        else:
+            print()
+            print(f"        {RED}[ERROR] Invalid option!{WHITE}")
+            time.sleep(1)
+
+
 def action_update_ytdlp():
     clear()
     print_header("UPDATING YT-DLP")
-    print(f"{YELLOW}[INFO] Downloading the latest yt-dlp.exe directly from GitHub...{WHITE}")
+    if not YTDLP.exists():
+        print(f"{YELLOW}[INFO] yt-dlp not found in bin folder. Installing automatically...{WHITE}")
+    else:
+        print(f"{YELLOW}[INFO] Downloading the latest yt-dlp.exe directly from GitHub...{WHITE}")
     print()
-    print(f"{CYAN}[1/3] Connecting to GitHub servers...")
-    time.sleep(1)
-    print(f"{CYAN}[2/3] Downloading latest binary (Please wait)...")
-    url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+    
+    url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" if os.name == "nt" else "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
     try:
+        BIN_DIR.mkdir(parents=True, exist_ok=True)
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req) as resp, open(YTDLP, "wb") as f:
             shutil.copyfileobj(resp, f)
-        print(f"{CYAN}[3/3] Finalizing installation...{WHITE}")
-        time.sleep(1)
+        if os.name != "nt":
+            YTDLP.chmod(0o755)
         print()
-        print(f"{GREEN}[SUCCESS] yt-dlp has been updated!{WHITE}")
+        print(f"{GREEN}[SUCCESS] yt-dlp is installed and up-to-date!{WHITE}")
     except Exception as e:
         print()
-        print(f"{RED}[ERROR] Update failed. Check connection. ({e}){WHITE}")
+        print(f"{RED}[ERROR] Update failed. Check your connection. ({e}){WHITE}")
     print()
     input("Press Enter to continue...")
 
@@ -444,8 +560,11 @@ def action_update_ytdlp():
 def action_update_ffmpeg():
     clear()
     print_header("UPDATING FFMPEG")
-    print(f"{YELLOW}[INFO] Downloading latest FFmpeg Essentials build...{WHITE}")
-    print(f"{YELLOW}[INFO] Please wait, this may take a moment (~100MB)...{WHITE}")
+    ffmpeg_exe = BIN_DIR / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+    if not ffmpeg_exe.exists():
+        print(f"{YELLOW}[INFO] FFmpeg not found in bin folder. Installing automatically...{WHITE}")
+    else:
+        print(f"{YELLOW}[INFO] Downloading latest FFmpeg Essentials build (~100MB)...{WHITE}")
     print()
 
     tmp_dir = Path(tempfile.gettempdir())
@@ -454,6 +573,7 @@ def action_update_ffmpeg():
 
     url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
     try:
+        BIN_DIR.mkdir(parents=True, exist_ok=True)
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req) as resp, open(zip_path, "wb") as f:
             shutil.copyfileobj(resp, f)
@@ -464,15 +584,18 @@ def action_update_ffmpeg():
             zf.extractall(extract_dir)
 
         bin_folder = None
-        for path in extract_dir.rglob("ffmpeg.exe"):
+        for path in extract_dir.rglob("ffmpeg.exe" if os.name == "nt" else "ffmpeg"):
             bin_folder = path.parent
             break
 
         if bin_folder:
-            for exe in ("ffmpeg.exe", "ffprobe.exe", "ffplay.exe"):
+            for exe in ("ffmpeg.exe", "ffprobe.exe", "ffplay.exe") if os.name == "nt" else ("ffmpeg", "ffprobe", "ffplay"):
                 src = bin_folder / exe
                 if src.exists():
-                    shutil.copy2(src, BIN_DIR / exe)
+                    dest = BIN_DIR / exe
+                    shutil.copy2(src, dest)
+                    if os.name != "nt":
+                        dest.chmod(0o755)
 
         zip_path.unlink(missing_ok=True)
         shutil.rmtree(extract_dir, ignore_errors=True)
@@ -482,10 +605,50 @@ def action_update_ffmpeg():
         input("Press Enter to continue...")
         return
 
-    if (BIN_DIR / "ffmpeg.exe").exists():
-        print(f"{GREEN}[SUCCESS] FFmpeg, ffprobe, and ffplay updated successfully!{WHITE}")
+    if ffmpeg_exe.exists():
+        print(f"{GREEN}[SUCCESS] FFmpeg, ffprobe, and ffplay installed/updated successfully!{WHITE}")
     else:
-        print(f"{RED}[ERROR] FFmpeg update failed. Check your connection.{WHITE}")
+        print(f"{RED}[ERROR] FFmpeg installation failed.{WHITE}")
+    print()
+    input("Press Enter to continue...")
+
+
+def action_update():
+    clear()
+    print_header("UPDATING MY DOWNLOADER")
+    print(f"{YELLOW}[INFO] Checking for latest version of My Downloader...{WHITE}")
+    print()
+
+    raw_url = f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/latest/download/{GITHUB_EXE_FILENAME}"
+    download_url = urllib.parse.quote(raw_url, safe=":/%")
+    
+    try:
+        print(f"{CYAN}[1/2] Connecting to GitHub releases...")
+        
+        req = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0"})
+        
+        with urllib.request.urlopen(req) as resp:
+            if resp.status == 200:
+                content_type = resp.headers.get("Content-Type", "")
+                if "html" in content_type.lower():
+                    raise Exception("Release file not found on GitHub (Received 404 HTML page).")
+                
+                print(f"{CYAN}[2/2] Downloading latest binary...")
+                temp_exe = Path("My_Downloader_temp.exe")
+                with open(temp_exe, "wb") as f:
+                    shutil.copyfileobj(resp, f)
+                
+                print()
+                print(f"{GREEN}[SUCCESS] Download complete!{WHITE}")
+                print(f"{YELLOW}[INFO] Replace your current file with 'My_Downloader_temp.exe'.{WHITE}")
+            else:
+                raise Exception(f"HTTP Status {resp.status}")
+                
+    except Exception as e:
+        print()
+        print(f"{RED}[ERROR] Self-update failed: {e}{WHITE}")
+        print(f"{YELLOW}[INFO] Verify that '{GITHUB_EXE_FILENAME}' is attached to your latest release on GitHub.{WHITE}")
+    
     print()
     input("Press Enter to continue...")
 
@@ -525,40 +688,45 @@ def action_exit():
  _____ _   _    _    _   _ _  __ __   _____  _   _   _____ ___  ____    _   _ ____ ___ _   _  ____ 
 |_   _| | | |  / \  | \ | | |/ / \ \ / / _ \| | | | |  ___/ _ \|  _ \  | | | / ___|_ _| \ | |/ ___|
   | | | |_| | / _ \ |  \| | ' /   \ V / | | | | | | | |_ | | | | |_) | | | | \___ \| ||  \| | |  _ 
-  | | |  _  |/ ___ \| |\  | . \    | || |_| | |_| | |  _|| |_| |  _ <  | |_| |___) | || |\  | |_| |
+  | | |  _  |/ ___ \| |\  | . \    | || |_| | |_| | |  _|_| |_| |  _ <  | |_| |___) | || |\  | |_| |
   |_| |_| |_/_/   \_\_| \_|_|\_\   |_| \___/ \___/  |_|   \___/|_| \_\  \___/|____/___|_| \_|\____|
     """
-    cblock(f"\033[38;2;238;128;32m{logo}{WHITE}")
+    infos = r"""
+Git handle: Y2m777a5 | Git Repo: github.com/Y2m777a5/My-Downloader
+"""
+    cblock(f"{DEFAULT_COLOR}{logo}{WHITE}")
     print()
     cblock(f"{comment}")
     print()
-    time.sleep(2.5)  # Pauses for 2.5 seconds so they can see the logo
-    sys.exit()       # Closes the script cleanly
+    cblock(f"{DEFAULT_COLOR}{infos}")
+    print()
+    time.sleep(2.5)
+    sys.exit()
 
 
 def main():
     if os.name == "nt":
         os.system("title My Downloader")
     setup_console()
+    print(WHITE, end="")
 
     actions = {
         "1": action_video_mkv,
         "2": action_video_mp4,
         "3": action_audio,
         "4": action_custom,
-        "5": action_update_ytdlp,
-        "6": action_update_ffmpeg,
-        "7": action_exit
+        "5": action_install_update_menu,
+        "6": action_exit
     }
     while True:
         print_menu()
-        choice = input("Select an option (1-7): ").strip()
+        choice = input("Select an option (1-6): ").strip()
         action = actions.get(choice)
         if action:
             action()
         else:
-            print(f"{RED}[ERROR] Invalid option! Please enter a number between 1 and 7.{WHITE}")
-            time.sleep(1.5)  # Pause so they can read the error message
+            print(f"{RED}[ERROR] Invalid option! Please enter a number between 1 and 6.{WHITE}")
+            time.sleep(1.5)
 
 
 if __name__ == "__main__":
