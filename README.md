@@ -10,7 +10,7 @@
 
 </div>
 
-[![Latest Tag](https://img.shields.io/github/v/tag/Y2m777a5/My-Downloader?color=blue&label=Latest%20Version)](https://github.com/Y2m777a5/My-Downloader/tags)
+[![Latest Release](https://img.shields.io/github/v/release/Y2m777a5/My-Downloader?include_prereleases&color=blue&label=Latest%20Release)](https://github.com/Y2m777a5/My-Downloader/releases/latest)
 [![Download EXE](https://img.shields.io/badge/Download-.EXE-green?logo=windows)](https://github.com/YOUR_USERNAME/YOUR_REPO/releases/latest/download/My_Downloader.exe
 )
 
