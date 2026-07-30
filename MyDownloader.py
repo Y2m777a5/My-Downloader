@@ -24,6 +24,7 @@ import subprocess
 import json
 import urllib.request
 import urllib.parse
+import textwrap
 from pathlib import Path
 
 try:
@@ -618,47 +619,89 @@ def action_update_ffmpeg():
 def action_update():
     clear()
     print_header("UPDATING MY DOWNLOADER")
-    print(f"{YELLOW}[INFO] Checking for latest version of My Downloader...{WHITE}")
+    print(f"{YELLOW}[INFO] Checking for latest release on GitHub...{WHITE}")
     print()
 
-    raw_url = f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/latest/download/{GITHUB_EXE_FILENAME}"
-    download_url = urllib.parse.quote(raw_url, safe=":/%")
+    api_url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
     
     try:
-        print(f"{CYAN}[1/2] Connecting to GitHub releases...")
-        req = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0"})
+        print(f"{CYAN}[1/2] Fetching release details from GitHub API...")
+        req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
         
-        with urllib.request.urlopen(req) as resp:
-            if resp.status == 200:
-                content_type = resp.headers.get("Content-Type", "")
-                if "html" in content_type.lower():
-                    raise Exception("Release file not found on GitHub (Received 404 HTML page).")
-                
-                print(f"{CYAN}[2/2] Downloading latest binary...")
-                temp_exe = Path("My_Downloader_temp.exe")
-                with open(temp_exe, "wb") as f:
-                    shutil.copyfileobj(resp, f)
-                
-                print()
-                print(f"{GREEN}[SUCCESS] Download complete!{WHITE}")
-                print(f"{YELLOW}[INFO] The app will now restart to complete the update...{WHITE}")
-                time.sleep(2)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            release_data = json.loads(resp.read().decode())
 
-                # Spawn a background script to swap files after exit
-                target_exe = get_base_dir() / GITHUB_EXE_FILENAME
-                updater_bat = Path("update_updater.bat")
-                bat_script = f'timeout /t 2 /nobreak > nul & move /y "{temp_exe.resolve()}" "{target_exe.resolve()}" & start "" "{target_exe.resolve()}" & del "%~f0"'
+        download_url = None
+        for asset in release_data.get("assets", []):
+            asset_name = asset.get("name", "")
+            if asset_name.lower() == GITHUB_EXE_FILENAME.lower() or asset_name.endswith(".exe"):
+                download_url = asset.get("browser_download_url")
+                break
 
-                updater_bat.write_text(bat_script, encoding="utf-8")
-                subprocess.Popen(["cmd.exe", "/c", str(updater_bat.resolve())], creationflags=subprocess.CREATE_NEW_CONSOLE)
-                sys.exit()
-            else:
-                raise Exception(f"HTTP Status {resp.status}")
-                
+        if not download_url:
+            raise Exception("No executable (.exe) file found in the latest GitHub release.")
+
+        print(f"{CYAN}[2/2] Downloading latest binary...")
+        req_dl = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0"})
+        
+        base_folder = get_base_dir()
+        temp_exe = base_folder / "My_Downloader_temp.exe"
+        
+        with urllib.request.urlopen(req_dl) as resp, open(temp_exe, "wb") as f:
+            shutil.copyfileobj(resp, f)
+
+        print()
+        print(f"{GREEN}[SUCCESS] Download complete!{WHITE}")
+        print(f"{YELLOW}[INFO] The app will now restart to apply the update...{WHITE}")
+        time.sleep(1)
+
+        is_frozen = getattr(sys, 'frozen', False)
+        current_exe = Path(sys.executable).resolve() if is_frozen else (base_folder / GITHUB_EXE_FILENAME)
+        target_exe = base_folder / GITHUB_EXE_FILENAME
+        updater_bat = base_folder / "updater.bat"
+
+        current_path = str(current_exe.resolve())
+        target_path = str(target_exe.resolve())
+        temp_path = str(temp_exe.resolve())
+
+        # If user renamed the file, delete the old renamed EXE once unlocked
+        del_renamed_cmd = f'if exist "{current_path}" del /f /q "{current_path}" > nul 2>&1'
+        bat_script = textwrap.dedent(f"""\
+            @echo off
+            setlocal enabledelayedexpansion
+            cd /d "{base_folder.resolve()}"
+            timeout /t 1 /nobreak > nul
+            set count=0
+
+            :retry
+            {del_renamed_cmd}
+            move /y "{temp_path}" "{target_path}" > nul 2>&1
+
+            if exist "{temp_path}" (
+                set /a count+=1
+                if !count! GEQ 15 goto end
+                timeout /t 1 /nobreak > nul
+                goto retry
+            )
+
+            if exist "{target_path}" (
+                explorer.exe "{target_path}"
+            )
+
+            :end
+            del "%~f0"
+        """)
+
+        updater_bat.write_text(bat_script, encoding="utf-8")
+        subprocess.Popen(["cmd.exe", "/c", str(updater_bat.resolve())], creationflags=subprocess.CREATE_NEW_CONSOLE)
+        
+        # Immediate C-level exit to release file locks instantly
+        os._exit(0)
+
     except Exception as e:
         print()
         print(f"{RED}[ERROR] Self-update failed: {e}{WHITE}")
-        print(f"{YELLOW}[INFO] Verify that '{GITHUB_EXE_FILENAME}' is attached to your latest release on GitHub.{WHITE}")
+        print(f"{YELLOW}[INFO] Verify internet connection and check GitHub releases.{WHITE}")
         print()
         input("Press Enter to continue...")
 
@@ -730,6 +773,7 @@ def main():
         else:
             print(f"{RED}[ERROR] Invalid option! Please enter a number between 1 and 6.{WHITE}")
             time.sleep(1.5)
+
 
 
 if __name__ == "__main__":
