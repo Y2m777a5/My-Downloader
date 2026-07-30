@@ -426,7 +426,7 @@ def action_custom():
 
 def get_local_ytdlp_version():
     if not YTDLP.exists():
-        return "[File not found: select to install]"
+        return "[File not found: install]"
     try:
         res = subprocess.run([str(YTDLP), "--version"], capture_output=True, text=True, timeout=3)
         return res.stdout.strip() if res.returncode == 0 else "installed"
@@ -437,7 +437,7 @@ def get_local_ytdlp_version():
 def get_local_ffmpeg_version():
     ffmpeg_exe = BIN_DIR / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
     if not ffmpeg_exe.exists():
-        return "[File not found: select to install]"
+        return "[File not found: install]"
     try:
         res = subprocess.run([str(ffmpeg_exe), "-version"], capture_output=True, text=True, timeout=3)
         if res.returncode == 0:
@@ -504,8 +504,10 @@ def action_install_update_menu():
             f"------------------                ------------------\n"
             f"[1] yt-dlp                          ({yt_status})\n"
             f"    {yt_local:<24}\n"
+            f"\n"
             f"[2] FFmpeg                          ({ff_status})\n"
             f"    {ff_local:<24}\n"
+            f"\n"
             f"[3] My Downloader                   ({app_status})\n"
             f"    v{app_local:<21}\n"
             f"===================================================\n"
@@ -624,7 +626,6 @@ def action_update():
     
     try:
         print(f"{CYAN}[1/2] Connecting to GitHub releases...")
-        
         req = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0"})
         
         with urllib.request.urlopen(req) as resp:
@@ -640,7 +641,17 @@ def action_update():
                 
                 print()
                 print(f"{GREEN}[SUCCESS] Download complete!{WHITE}")
-                print(f"{YELLOW}[INFO] Replace your current file with 'My_Downloader_temp.exe'.{WHITE}")
+                print(f"{YELLOW}[INFO] The app will now restart to complete the update...{WHITE}")
+                time.sleep(2)
+
+                # Spawn a background script to swap files after exit
+                target_exe = get_base_dir() / GITHUB_EXE_FILENAME
+                updater_bat = Path("update_updater.bat")
+                bat_script = f'timeout /t 2 /nobreak > nul & move /y "{temp_exe.resolve()}" "{target_exe.resolve()}" & start "" "{target_exe.resolve()}" & del "%~f0"'
+                
+                updater_bat.write_text(bat_script, encoding="utf-8")
+                subprocess.Popen(["cmd.exe", "/c", str(updater_bat.resolve())], creationflags=subprocess.CREATE_NEW_CONSOLE)
+                sys.exit()
             else:
                 raise Exception(f"HTTP Status {resp.status}")
                 
@@ -648,9 +659,8 @@ def action_update():
         print()
         print(f"{RED}[ERROR] Self-update failed: {e}{WHITE}")
         print(f"{YELLOW}[INFO] Verify that '{GITHUB_EXE_FILENAME}' is attached to your latest release on GitHub.{WHITE}")
-    
-    print()
-    input("Press Enter to continue...")
+        print()
+        input("Press Enter to continue...")
 
 
 def action_exit():
