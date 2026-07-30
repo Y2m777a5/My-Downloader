@@ -28,7 +28,7 @@ Click below to download the zip directly:
   
   ⚠️⚠️⚠️
   
-  **N.B : Do not forget to update if you are a first-time user.***
+  **N.B : Do not forget to update if you are a first-time user.**
   
   ***Keep the app and "bin" folder in the same folder***
   
