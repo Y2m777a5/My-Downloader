@@ -7,7 +7,8 @@ Requires:
 
 Run with:  python downloader.py
 """
-# --- CONFIGURATIONS FOR APP & REPOSITORY ---
+
+# --- Configuration & Metadata ---
 VERSION = "2.2.6.2"
 CURRENT_VERSION = VERSION
 REPO_OWNER = "Y2m777a5"
@@ -40,23 +41,23 @@ except ImportError:
 
 CONSOLE_COLS = 120
 CONSOLE_LINES = 40
-MAX_CONSOLE_COLS = 220  # hard ceiling so we never try to grow off-screen
+MAX_CONSOLE_COLS = 220  # Hard ceiling for screen width
 
 
 def get_base_dir():
-    """Get the absolute path of the script or compiled .exe."""
+    """Get absolute path of script or compiled EXE."""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
 
-# Colors
+# Color Palette
 WHITE = "\033[97m"
 RED = "\033[91m"
 YELLOW = "\033[93m"
 CYAN = "\033[96m"
 GREEN = "\033[38;2;0;254;0m"
 RESET = "\033[0m"
-DEFAULT_COLOR= "\033[38;2;238;128;32m"
+DEFAULT_COLOR = "\033[38;2;238;128;32m"
 
 BASE_DIR = get_base_dir()
 BIN_DIR = BASE_DIR / "bin"
@@ -72,15 +73,16 @@ FULL = "█" * 25
 EMPTY = "░" * 25
 
 
+# --- Terminal Layout & Console Controls ---
 def setup_console():
-    """Fix the console to a known size and move the window to screen center."""
+    """Initialize console size and center window (Windows)."""
     if os.name != "nt":
         return
     resize_console(CONSOLE_COLS, CONSOLE_LINES)
 
 
 def resize_console(cols, lines=CONSOLE_LINES):
-    """Resize the console buffer/window to the given size and re-center it."""
+    """Resize console buffer and re-center."""
     if os.name != "nt":
         return
     cols = max(80, min(cols, MAX_CONSOLE_COLS))
@@ -89,7 +91,7 @@ def resize_console(cols, lines=CONSOLE_LINES):
 
 
 def maximize_console():
-    """Maximize the console window to fill the screen (Windows only)."""
+    """Maximize console window (Windows)."""
     if os.name != "nt" or ctypes is None:
         return
     try:
@@ -97,13 +99,13 @@ def maximize_console():
         user32 = ctypes.windll.user32
         hwnd = kernel32.GetConsoleWindow()
         if hwnd:
-            user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
+            user32.ShowWindow(hwnd, 3)
     except Exception:
         pass
 
 
 def restore_console():
-    """Un-maximize and put the console back to its normal centered size."""
+    """Restore normal centered console size (Windows)."""
     if os.name != "nt" or ctypes is None:
         return
     try:
@@ -111,14 +113,14 @@ def restore_console():
         user32 = ctypes.windll.user32
         hwnd = kernel32.GetConsoleWindow()
         if hwnd:
-            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.ShowWindow(hwnd, 9)
     except Exception:
         pass
     resize_console(CONSOLE_COLS, CONSOLE_LINES)
 
 
 def center_console_window():
-    """Move the console window to the middle of the primary monitor (Windows only)."""
+    """Center console on primary monitor (Windows)."""
     if ctypes is None:
         return
     try:
@@ -134,13 +136,12 @@ def center_console_window():
         win_w = rect.right - rect.left
         win_h = rect.bottom - rect.top
 
-        screen_w = user32.GetSystemMetrics(0)   # SM_CXSCREEN
-        screen_h = user32.GetSystemMetrics(1)   # SM_CYSCREEN
+        screen_w = user32.GetSystemMetrics(0)
+        screen_h = user32.GetSystemMetrics(1)
 
         x = max((screen_w - win_w) // 2, 0)
         y = max((screen_h - win_h) // 2, 0)
 
-        # SWP_NOSIZE=0x0001, SWP_NOZORDER=0x0004
         user32.SetWindowPos(hwnd, 0, x, y, 0, 0, 0x0001 | 0x0004)
     except Exception:
         pass
@@ -151,12 +152,12 @@ def term_width():
 
 
 def cline(text=""):
-    """Print a single line centered in the console (Used for titles)."""
+    """Print centered single line."""
     print(text.center(term_width()))
 
 
 def cblock(text):
-    """Print a multi-line block centered as a whole (Used for headers)."""
+    """Print centered multiline block."""
     width = term_width()
     lines = text.splitlines()
     maxlen = max((len(l) for l in lines), default=0)
@@ -166,7 +167,7 @@ def cblock(text):
 
 
 def lblock(text):
-    """Print a multi-line block left-aligned."""
+    """Print left-aligned multiline block."""
     for line in text.splitlines():
         print(line)
 
@@ -205,7 +206,7 @@ def print_logo():
 | |  | | |_| | | |_| | (_) \ V  V /| | | | | (_) | (_| | (_| |  __| |   
 |_|  |_|\__, | |____/ \___/ \_/\_/ |_| |_|_|\___/ \__,_|\__,_|\___|_|   
         |___/                                                            
-    """
+"""
     cblock(f"\033[38;2;238;128;32m{logo}{WHITE}")
 
 
@@ -216,7 +217,6 @@ def print_menu():
     print_logo()
     print()
 
-    # Dynamic status tag for Option 5
     install_option = " [5] Install / Update  (Available)" if UPDATE_AVAILABLE else " [5] Install / Update"
 
     menu_lines = [
@@ -243,9 +243,9 @@ def print_menu():
     print(f"\n\n{WHITE}")
 
 
-##############################  For Downloading Videos and Audios  ##############################
+# --- Media Download Handlers ---
 def ensure_ytdlp_exists():
-    """Checks if yt-dlp exists before running any download commands."""
+    """Verify yt-dlp binary presence."""
     if not YTDLP.exists():
         print(f"{RED}[ERROR] yt-dlp was not found in the 'bin' directory!{WHITE}")
         print(f"{YELLOW}[INFO] Please run Option [5] (Install / Update) first.{WHITE}\n")
@@ -432,7 +432,7 @@ def action_custom():
                        ["-f", fmt, "--merge-output-format", "mp4"])
 
 
-##############################  For Update the App  ##############################
+# --- Updates & Dependency Management ---
 def get_local_ytdlp_version():
     if not YTDLP.exists():
         return "[File not found: install]"
@@ -452,7 +452,6 @@ def get_local_ffmpeg_version():
         if res.returncode == 0:
             first_line = res.stdout.splitlines()[0] if res.stdout else ""
             parts = first_line.split()
-            # Extracts the version token
             if len(parts) >= 3 and parts[1].lower() == "version":
                 return parts[2].split("-")[0]
             return "installed"
@@ -462,7 +461,7 @@ def get_local_ffmpeg_version():
 
 
 def fetch_latest_release_tag(repo_path):
-    """Fetches the latest release tag from GitHub API."""
+    """Fetch latest release tag from GitHub API."""
     url = f"https://api.github.com/repos/{repo_path}/releases/latest"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -474,19 +473,16 @@ def fetch_latest_release_tag(repo_path):
 
 
 def format_update_status(local_ver, latest_tag):
-    """Shows latest_tag if an update is available; otherwise shows 'Unavailable'."""
+    """Format status indicator string for UI."""
     if latest_tag == "Unavailable":
         return "Unavailable"
 
-    # Clean leading 'v' and whitespace for accurate comparison
     clean_local = local_ver.lstrip("v").strip()
     clean_latest = latest_tag.lstrip("v").strip()
 
-    # If versions match, no update is available -> show "Unavailable"
     if clean_local == clean_latest:
         return "Unavailable"
 
-    # If component is missing or version differs -> show new version tag
     return latest_tag
 
 
@@ -503,7 +499,6 @@ def action_install_update_menu():
         ff_latest = fetch_latest_release_tag("GyanD/codexffmpeg")
         app_latest = fetch_latest_release_tag(f"{REPO_OWNER}/{REPO_NAME}")
 
-        # Status check logic
         yt_status = format_update_status(yt_local, yt_latest)
         ff_status = format_update_status(ff_local, ff_latest)
         app_status = format_update_status(app_local, app_latest)
@@ -529,7 +524,7 @@ def action_install_update_menu():
         choice = input("        Select an option (0-3): ").strip()
         
         if choice == "0":
-            check_for_updates()  # Refresh status before returning to main menu
+            check_for_updates()
             break
         elif choice == "1":
             action_update_ytdlp()
@@ -662,49 +657,22 @@ def action_update():
         print()
         print(f"{GREEN}[SUCCESS] Download complete!{WHITE}")
         print(f"{YELLOW}[INFO] The app will now restart to apply the update...{WHITE}")
-        time.sleep(1)
+        sys.stdout.flush()
 
         is_frozen = getattr(sys, 'frozen', False)
         current_exe = Path(sys.executable).resolve() if is_frozen else (base_folder / GITHUB_EXE_FILENAME)
         target_exe = base_folder / GITHUB_EXE_FILENAME
-        updater_bat = base_folder / "updater.bat"
 
-        current_path = str(current_exe.resolve())
-        target_path = str(target_exe.resolve())
-        temp_path = str(temp_exe.resolve())
+        # Rename running EXE to bypass Windows file locking
+        if current_exe.exists():
+            old_exe = base_folder / f"My Downloader.old.{int(time.time())}.exe"
+            current_exe.rename(old_exe)
 
-        # If user renamed the file, delete the old renamed EXE once unlocked
-        del_renamed_cmd = f'if exist "{current_path}" del /f /q "{current_path}" > nul 2>&1'
-        bat_script = textwrap.dedent(f"""\
-            @echo off
-            setlocal enabledelayedexpansion
-            cd /d "{base_folder.resolve()}"
-            timeout /t 1 /nobreak > nul
-            set count=0
+        temp_exe.rename(target_exe)
 
-            :retry
-            {del_renamed_cmd}
-            move /y "{temp_path}" "{target_path}" > nul 2>&1
+        # Relaunch new EXE via explorer.exe to avoid blocking
+        subprocess.Popen(["explorer.exe", str(target_exe.resolve())])
 
-            if exist "{temp_path}" (
-                set /a count+=1
-                if !count! GEQ 15 goto end
-                timeout /t 1 /nobreak > nul
-                goto retry
-            )
-
-            if exist "{target_path}" (
-                explorer.exe "{target_path}"
-            )
-
-            :end
-            del "%~f0"
-        """)
-
-        updater_bat.write_text(bat_script, encoding="utf-8")
-        subprocess.Popen(["cmd.exe", "/c", str(updater_bat.resolve())], creationflags=subprocess.CREATE_NEW_CONSOLE)
-        
-        # Immediate C-level exit to release file locks instantly
         os._exit(0)
 
     except Exception as e:
@@ -715,14 +683,12 @@ def action_update():
         input("Press Enter to continue...")
 
 
-##############################  Checks for update at the beginning  ##############################
+# --- Startup Update Checks ---
 def is_update_needed(local_ver, latest_tag):
-    """Returns True if a component is missing or has a newer version online."""
-    # If the file is missing locally, an install/update is definitely needed
+    """Determine if a component is missing or outdated."""
     if "not found" in local_ver.lower():
         return True
     
-    # If network/API failed, we can't confirm a version update
     if latest_tag == "Unavailable":
         return False
 
@@ -732,10 +698,9 @@ def is_update_needed(local_ver, latest_tag):
 
 
 def check_for_updates():
-    """Checks if any component is missing locally or has a newer version online."""
+    """Verify local files and remote releases."""
     global UPDATE_AVAILABLE
     try:
-        # Step 1: Instant local check for missing bin files
         ffmpeg_exe = BIN_DIR / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
         yt_missing = not YTDLP.exists()
         ff_missing = not ffmpeg_exe.exists()
@@ -744,7 +709,6 @@ def check_for_updates():
             UPDATE_AVAILABLE = True
             return
 
-        # Step 2: Version checks against GitHub releases
         yt_local = get_local_ytdlp_version()
         ff_local = get_local_ffmpeg_version()
         app_local = CURRENT_VERSION
@@ -759,12 +723,11 @@ def check_for_updates():
 
         UPDATE_AVAILABLE = yt_has_update or ff_has_update or app_has_update
     except Exception:
-        # Fallback check if any unexpected error occurs
         ffmpeg_exe = BIN_DIR / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
         UPDATE_AVAILABLE = (not YTDLP.exists()) or (not ffmpeg_exe.exists())
 
 
-##############################  EXIT PAGE  ##############################
+# --- Exit Screen ---
 def action_exit():
     clear()
     logo = r"""
@@ -803,14 +766,25 @@ def action_exit():
     sys.exit()
 
 
-##############################  Mian Menu PAGE  ##############################
+# --- Main Application Entry ---
+def cleanup_old_update_files():
+    """Remove leftover .old.exe files from previous updates."""
+    for old_file in get_base_dir().glob("My Downloader.old.*.exe"):
+        for attempt in range(5):
+            try:
+                old_file.unlink()
+                break
+            except OSError:
+                time.sleep(0.3)
+
+
 def main():
     if os.name == "nt":
         os.system("title My Downloader")
     setup_console()
     print(WHITE, end="")
 
-    # Perform initial update check on launch
+    cleanup_old_update_files()
     check_for_updates()
 
     actions = {
