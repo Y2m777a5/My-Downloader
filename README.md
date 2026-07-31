@@ -41,3 +41,5 @@ Click below to download the zip directly:
 </div>
 
 Alternatively, visit the **[Releases Page](https://github.com/Y2m777a5/My-Downloader/releases/latest)** to view release notes and older versions.
+
+**ℹ️** ***Windows Smart App Control may block this app since it's unsigned; you can either wait for a signed release, or disable Smart App Control temporarily in Windows Security settings to run it.***
