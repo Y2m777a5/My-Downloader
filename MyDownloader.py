@@ -793,14 +793,12 @@ def action_exit():
               ####################              
                    ##########                   
 """
-    comment = r"""
-    ♥ THANK YOU FOR USING ♥"""
-    infos = r"""    Git handle: Y2m777a5 | Git Repo: github.com/Y2m777a5/My-DownloaderGit handle: Y2m777a5 | Git Repo: github.com/Y2m777a5/My-Downloader"""
     cblock(f"{DEFAULT_COLOR}{logo}")
     print(f"{WHITE}")
     cline(f"  ♥ THANK YOU FOR USING ♥")
     print(f"{DEFAULT_COLOR}")
     cline(f"Git handle: Y2m777a5 | Git Repo: github.com/Y2m777a5/My-Downloader")
+    
     time.sleep(3)
     sys.exit()
 
