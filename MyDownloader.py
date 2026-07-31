@@ -8,7 +8,7 @@ Requires:
 Run with:  python downloader.py
 """
 # --- CONFIGURATIONS FOR APP & REPOSITORY ---
-VERSION = "2.2.6.0"
+VERSION = "2.2.6.2"
 CURRENT_VERSION = VERSION
 REPO_OWNER = "Y2m777a5"
 REPO_NAME = "My-Downloader"       
@@ -65,6 +65,8 @@ YTDLP = BIN_DIR / ("yt-dlp.exe" if os.name == "nt" else "yt-dlp")
 
 OUT_DIR.mkdir(exist_ok=True)
 BIN_DIR.mkdir(exist_ok=True)
+
+UPDATE_AVAILABLE = False
 
 FULL = "█" * 25
 EMPTY = "░" * 25
@@ -213,6 +215,10 @@ def print_menu():
     print()
     print_logo()
     print()
+
+    # Dynamic status tag for Option 5
+    install_option = " [5] Install / Update  (Available)" if UPDATE_AVAILABLE else " [5] Install / Update"
+
     menu_lines = [
         "====================================================",
         "My Downloader".center(52),
@@ -221,7 +227,7 @@ def print_menu():
         " [2] Download Video (Best Quality - MP4)",
         " [3] Download Audio Only (MP3)",
         " [4] Download Custom Format / List Formats",
-        " [5] Install / Update",
+        install_option,
         " [6] Exit",
         "====================================================",
     ]
@@ -237,6 +243,7 @@ def print_menu():
     print(f"\n\n{WHITE}")
 
 
+##############################  For Downloading Videos and Audios  ##############################
 def ensure_ytdlp_exists():
     """Checks if yt-dlp exists before running any download commands."""
     if not YTDLP.exists():
@@ -425,6 +432,7 @@ def action_custom():
                        ["-f", fmt, "--merge-output-format", "mp4"])
 
 
+##############################  For Update the App  ##############################
 def get_local_ytdlp_version():
     if not YTDLP.exists():
         return "[File not found: install]"
@@ -521,6 +529,7 @@ def action_install_update_menu():
         choice = input("        Select an option (0-3): ").strip()
         
         if choice == "0":
+            check_for_updates()  # Refresh status before returning to main menu
             break
         elif choice == "1":
             action_update_ytdlp()
@@ -706,6 +715,56 @@ def action_update():
         input("Press Enter to continue...")
 
 
+##############################  Checks for update at the beginning  ##############################
+def is_update_needed(local_ver, latest_tag):
+    """Returns True if a component is missing or has a newer version online."""
+    # If the file is missing locally, an install/update is definitely needed
+    if "not found" in local_ver.lower():
+        return True
+    
+    # If network/API failed, we can't confirm a version update
+    if latest_tag == "Unavailable":
+        return False
+
+    clean_local = local_ver.lstrip("v").strip()
+    clean_latest = latest_tag.lstrip("v").strip()
+    return clean_local != clean_latest
+
+
+def check_for_updates():
+    """Checks if any component is missing locally or has a newer version online."""
+    global UPDATE_AVAILABLE
+    try:
+        # Step 1: Instant local check for missing bin files
+        ffmpeg_exe = BIN_DIR / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+        yt_missing = not YTDLP.exists()
+        ff_missing = not ffmpeg_exe.exists()
+
+        if yt_missing or ff_missing:
+            UPDATE_AVAILABLE = True
+            return
+
+        # Step 2: Version checks against GitHub releases
+        yt_local = get_local_ytdlp_version()
+        ff_local = get_local_ffmpeg_version()
+        app_local = CURRENT_VERSION
+
+        yt_latest = fetch_latest_release_tag("yt-dlp/yt-dlp")
+        ff_latest = fetch_latest_release_tag("GyanD/codexffmpeg")
+        app_latest = fetch_latest_release_tag(f"{REPO_OWNER}/{REPO_NAME}")
+
+        yt_has_update = is_update_needed(yt_local, yt_latest)
+        ff_has_update = is_update_needed(ff_local, ff_latest)
+        app_has_update = is_update_needed(app_local, app_latest)
+
+        UPDATE_AVAILABLE = yt_has_update or ff_has_update or app_has_update
+    except Exception:
+        # Fallback check if any unexpected error occurs
+        ffmpeg_exe = BIN_DIR / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+        UPDATE_AVAILABLE = (not YTDLP.exists()) or (not ffmpeg_exe.exists())
+
+
+##############################  EXIT PAGE  ##############################
 def action_exit():
     clear()
     logo = r"""
@@ -750,11 +809,15 @@ Git handle: Y2m777a5 | Git Repo: github.com/Y2m777a5/My-Downloader
     sys.exit()
 
 
+##############################  Mian Menu PAGE  ##############################
 def main():
     if os.name == "nt":
         os.system("title My Downloader")
     setup_console()
     print(WHITE, end="")
+
+    # Perform initial update check on launch
+    check_for_updates()
 
     actions = {
         "1": action_video_mkv,
@@ -773,7 +836,6 @@ def main():
         else:
             print(f"{RED}[ERROR] Invalid option! Please enter a number between 1 and 6.{WHITE}")
             time.sleep(1.5)
-
 
 
 if __name__ == "__main__":
