@@ -9,13 +9,14 @@ Run with:  python downloader.py
 """
 
 # --- Configuration & Metadata ---
-VERSION = "2.2.6.2"
+VERSION = "2.2.8.2"
 CURRENT_VERSION = VERSION
 REPO_OWNER = "Y2m777a5"
 REPO_NAME = "My-Downloader"       
 GITHUB_EXE_FILENAME = "My Downloader.exe"
 
 import os
+import ssl
 import sys
 import time
 import shutil
@@ -23,9 +24,9 @@ import zipfile
 import tempfile
 import subprocess
 import json
+import threading
 import urllib.request
 import urllib.parse
-import textwrap
 from pathlib import Path
 
 try:
@@ -73,12 +74,51 @@ FULL = "█" * 25
 EMPTY = "░" * 25
 
 
+def flush_input():
+    """Clears queued extra keypresses/newlines from terminal input buffer."""
+    if msvcrt:
+        while msvcrt.kbhit():
+            try:
+                msvcrt.getch()
+            except Exception:
+                break
+    else:
+        try:
+            import select
+            while select.select([sys.stdin], [], [], 0.0)[0]:
+                sys.stdin.read(1)
+        except Exception:
+            pass
+
+
+def check_q_pressed():
+    """Returns True if 'q' or 'Q' key was pressed."""
+    if msvcrt:
+        if msvcrt.kbhit():
+            try:
+                ch = msvcrt.getch()
+                if ch.lower() == b"q":
+                    return True
+            except Exception:
+                pass
+    else:
+        try:
+            import select
+            if select.select([sys.stdin], [], [], 0.0)[0]:
+                ch = sys.stdin.read(1)
+                if ch.lower() == 'q':
+                    return True
+        except Exception:
+            pass
+    return False
+
+
 # --- Terminal Layout & Console Controls ---
 def setup_console():
-    """Initialize console size and center window (Windows)."""
-    if os.name != "nt":
-        return
-    resize_console(CONSOLE_COLS, CONSOLE_LINES)
+    """Initialize console size, ANSI processing, and center window (Windows)."""
+    if os.name == "nt":
+        os.system("")  # Enables ANSI escape sequences natively in Windows cmd
+        resize_console(CONSOLE_COLS, CONSOLE_LINES)
 
 
 def resize_console(cols, lines=CONSOLE_LINES):
@@ -185,7 +225,22 @@ def cleanup_partials():
                 pass
 
 
-def print_header(title, url=None):
+def print_header_prompt(title):
+    print()
+    lines = [
+        "----------------------------------------------------",
+        title.center(52),
+        "----------------------------------------------------",
+        " [0] Go to menu",
+        " [1] Download",
+        "----------------------------------------------------",
+        "For multiple downloads: use comma(,) or space".center(52),
+    ]
+    cblock("\n".join(lines))
+    print()
+
+
+def print_header_simple(title):
     print()
     lines = [
         "----------------------------------------------------",
@@ -194,8 +249,6 @@ def print_header(title, url=None):
     ]
     cblock("\n".join(lines))
     print()
-    if url:
-        print(f"Video URL: {url}")
 
 
 def print_logo():
@@ -226,7 +279,7 @@ def print_menu():
         " [1] Download Video (Best Quality - MKV)",
         " [2] Download Video (Best Quality - MP4)",
         " [3] Download Audio Only (MP3)",
-        " [4] Download Custom Format / List Formats",
+        " [4] Download Custom (Advance download)",
         install_option,
         " [6] Exit",
         "====================================================",
@@ -249,47 +302,91 @@ def ensure_ytdlp_exists():
     if not YTDLP.exists():
         print(f"{RED}[ERROR] yt-dlp was not found in the 'bin' directory!{WHITE}")
         print(f"{YELLOW}[INFO] Please run Option [5] (Install / Update) first.{WHITE}\n")
+        flush_input()
         input("Press Enter to return to main menu...")
         return False
     return True
 
 
-def download_with_bar(url, title, extra_args):
-    if not ensure_ytdlp_exists():
-        return
-
-    log_path = Path(tempfile.gettempdir()) / "ytdlp_progress.txt"
-    if log_path.exists():
-        log_path.unlink()
-
-    cmd = [
-        str(YTDLP),
-        "--ffmpeg-location", str(BIN_DIR),
-        "--no-colors",
-        *extra_args,
-        "--newline",
-        "--progress-template", "PG|%(progress._percent_str)s",
-        "-o", str(OUT_DIR / "%(title)s.%(ext)s"),
-        url,
-    ]
-
-    log_file = open(log_path, "w", encoding="utf-8", errors="ignore")
-    proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT)
-
+def prompt_urls_input(title):
+    """Collects URLs first in one prompt, then asks for action choice (0-1)."""
     clear()
-    print_header(title, url)
-    print(f"{CYAN}Progress:  [" + EMPTY + "] 0%")
-    print(f"{YELLOW}[INFO] Press 'Q' to cancel download.{WHITE}")
+    print_header_prompt(title)
+    
+    # Input 1: Collect URLs
+    raw_input = input("Enter your URL(s): ").strip()
+    print("\n")
+    
+    if not raw_input:
+        print(f"{YELLOW}[!] No URL entered. Returning to menu...{WHITE}")
+        time.sleep(1)
+        return []
+
+    # Support multiple URLs separated by space or comma
+    urls = [u.strip() for u in raw_input.replace(",", " ").split() if u.strip()]
+
+    # Display indexed links
+    for idx, u in enumerate(urls, 1):
+        print(f"video link [{idx}]: {u}")
+
     print()
 
-    canceled = False
-    last_pct = -1
+    # Input 2: Action choice
+    while True:
+        choice = input("Select an option to perform the actions (0-1): ").strip()
+        if choice == "0":
+            return []
+        elif choice == "1":
+            return urls
+        else:
+            print(f"{RED}[ERROR] Invalid option! Please enter 0 or 1.{WHITE}")
 
-    try:
-        while True:
-            if msvcrt and msvcrt.kbhit():
-                key = msvcrt.getch()
-                if key.lower() == b"q":
+
+def download_batch_with_bar(urls, title, extra_args):
+    """Handles downloading single or multiple items with live progress stacked line-by-line."""
+    if not ensure_ytdlp_exists() or not urls:
+        return
+
+    total = len(urls)
+    clear()
+    print_header_simple(title)
+
+    successful_count = 0
+    canceled_count = 0
+    failed_count = 0
+
+    for idx, url in enumerate(urls, 1):
+        log_path = Path(tempfile.gettempdir()) / f"ytdlp_progress_{idx}.txt"
+        if log_path.exists():
+            try:
+                log_path.unlink()
+            except OSError:
+                pass
+
+        cmd = [
+            str(YTDLP),
+            "--ffmpeg-location", str(BIN_DIR),
+            "--no-colors",
+            *extra_args,
+            "--newline",
+            "--progress-template", "PG|%(progress._percent_str)s",
+            "-o", str(OUT_DIR / "%(title)s.%(ext)s"),
+            url,
+        ]
+
+        log_file = open(log_path, "w", encoding="utf-8", errors="ignore")
+        proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT)
+
+        print(f"Video URL: {url}")
+        print(f"{CYAN}Progress:  [" + EMPTY + f"] 0%{RESET}")
+        print(f"{YELLOW}[INFO] Press 'Q' to cancel this download.{RESET}")
+
+        canceled = False
+        last_pct = -1
+
+        try:
+            while True:
+                if check_q_pressed():
                     proc.terminate()
                     try:
                         proc.wait(timeout=3)
@@ -298,48 +395,53 @@ def download_with_bar(url, title, extra_args):
                     canceled = True
                     break
 
-            if proc.poll() is not None:
-                break
+                if proc.poll() is not None:
+                    break
 
-            pct = read_progress(log_path)
-            if pct != last_pct:
-                draw_progress(title, url, pct)
-                last_pct = pct
+                pct = read_progress(log_path)
+                if pct != last_pct:
+                    draw_progress(pct)
+                    last_pct = pct
 
-            time.sleep(0.25)
-    finally:
-        log_file.close()
+                time.sleep(0.25)
+        except Exception:
+            pass
+        finally:
+            log_file.close()
 
-    if canceled:
-        clear()
-        print_header(title, url)
-        print("\n")
-        cline(f"{RED}[CANCELED] Download aborted by user.")
-        print()
+        content = ""
+        if log_path.exists():
+            content = log_path.read_text(encoding="utf-8", errors="ignore")
+
+        if canceled:
+            sys.stdout.write("\033[2A\r")
+            sys.stdout.write(f"\033[K{CYAN}Progress:  [{FULL[:max(0, last_pct)//4] + EMPTY[:25-max(0, last_pct)//4]}] {max(0, last_pct)}%\033[0m\n")
+            sys.stdout.write(f"\033[K{RED}[{idx}/{total}] Canceled by user.{WHITE}\n\n")
+            sys.stdout.flush()
+            cleanup_log(log_path)
+            canceled_count += 1
+            continue
+
+        return_code = proc.returncode
+        success = (return_code == 0) and ("error" not in content.lower() and "unable" not in content.lower())
+        final_pct = 100 if success else (last_pct if last_pct >= 0 else 0)
+
+        filled = final_pct // 4
+        bar = FULL[:filled] + EMPTY[:25 - filled]
+        sys.stdout.write(f"\033[2A\r{CYAN}Progress:  [{bar}] {final_pct}%\033[0m\033[K\n")
+
+        if not success:
+            sys.stdout.write(f"{RED}[{idx}/{total}] Download failed!{WHITE}\n\n")
+            failed_count += 1
+        else:
+            sys.stdout.write(f"{GREEN}[{idx}/{total}] Downloaded successfully!{WHITE}\n\n")
+            successful_count += 1
+
+        sys.stdout.flush()
         cleanup_log(log_path)
-        time.sleep(2)
-        return
 
-    content = ""
-    if log_path.exists():
-        content = log_path.read_text(encoding="utf-8", errors="ignore")
-
-    clear()
-    print_header(title, url)
-
-    if "error" in content.lower() or "unable" in content.lower():
-        print(f"{RED}[ERROR] Download failed:")
-        lblock("---------------------------------------------------\n"
-               + content.strip()
-               + "\n---------------------------------------------------")
-        cleanup_log(log_path)
-        input(f"{WHITE}Press Enter to continue...")
-        return
-
-    print(f"{CYAN}Progress:  [" + FULL + "] 100%")
-    print()
-    print(f"{GREEN}[DONE] Download complete! Check your 'Downloads' folder.{WHITE}")
-    cleanup_log(log_path)
+    print(f"{GREEN}[DONE] Processed {total} item(s): {successful_count} succeeded, {failed_count} failed, {canceled_count} canceled.{WHITE}")
+    flush_input()
     input("Press Enter to continue...")
 
 
@@ -360,10 +462,10 @@ def read_progress(log_path):
     return max(0, min(100, pct))
 
 
-def draw_progress(title, url, pct):
+def draw_progress(pct):
     filled = pct // 4
     bar = FULL[:filled] + EMPTY[:25 - filled]
-    sys.stdout.write(f"\033[3A\r{CYAN}Progress:  [{bar}] {pct}%\033[0m\033[K\n\033[2B")
+    sys.stdout.write(f"\033[2A\r{CYAN}Progress:  [{bar}] {pct}%\033[0m\033[K\n\033[1B")
     sys.stdout.flush()
 
 
@@ -376,60 +478,200 @@ def cleanup_log(log_path):
 
 
 def action_video_mkv():
-    clear()
-    print_header("DOWNLOAD BEST QUALITY (MKV)")
-    url = input("Enter Video URL: ").strip()
-    print()
-    print(f"{YELLOW}[INFO] Downloading best streams into MKV container...{WHITE}")
-    download_with_bar(url, "DOWNLOAD BEST QUALITY (MKV)",
-                       ["-f", "bv*+ba/b", "--merge-output-format", "mkv"])
+    urls = prompt_urls_input("DOWNLOAD BEST QUALITY (MKV)")
+    if not urls:
+        return
+    download_batch_with_bar(urls, "DOWNLOAD BEST QUALITY (MKV)",
+                           ["-f", "bv*+ba/b", "--merge-output-format", "mkv"])
 
 
 def action_video_mp4():
-    clear()
-    print_header("DOWNLOAD BEST QUALITY (MP4)")
-    url = input("Enter Video URL: ").strip()
-    print()
-    print(f"{YELLOW}[INFO] Downloading best video + audio track...{WHITE}")
-    download_with_bar(url, "DOWNLOAD BEST QUALITY (MP4)",
-                       ["-f", "bv*+ba/b", "--merge-output-format", "mp4"])
+    urls = prompt_urls_input("DOWNLOAD BEST QUALITY (MP4)")
+    if not urls:
+        return
+    download_batch_with_bar(urls, "DOWNLOAD BEST QUALITY (MP4)",
+                           ["-f", "bv*+ba/b", "--merge-output-format", "mp4"])
 
 
 def action_audio():
-    clear()
-    print_header("DOWNLOAD AUDIO ONLY (MP3)")
-    url = input("Enter Video URL: ").strip()
-    print()
-    print(f"{YELLOW}[INFO] Extracting audio to MP3...{WHITE}")
-    download_with_bar(url, "DOWNLOAD AUDIO ONLY (MP3)",
-                       ["-x", "--audio-format", "mp3", "--audio-quality", "0"])
+    urls = prompt_urls_input("DOWNLOAD AUDIO ONLY (MP3)")
+    if not urls:
+        return
+    download_batch_with_bar(urls, "DOWNLOAD AUDIO ONLY (MP3)",
+                           ["-x", "--audio-format", "mp3", "--audio-quality", "0"])
+
+
+# --- Formatted Custom Format Viewer ---
+def display_custom_formats(url):
+    """Fetches formats via JSON and prints sorted, categorized tables in cyan."""
+    cmd = [
+        str(YTDLP),
+        "--dump-json",
+        "--no-playlist",
+        "--no-warnings",
+        url
+    ]
+    
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return False
+
+    try:
+        data = json.loads(proc.stdout)
+        raw_formats = data.get("formats", [])
+    except Exception:
+        return False
+
+    if not raw_formats:
+        return False
+
+    mp4_videos = []
+    webm_videos = []
+    other_videos = []
+    m4a_audios = []
+    webm_audios = []
+    other_audios = []
+
+    for f in raw_formats:
+        fid = str(f.get("format_id", ""))
+        ext = str(f.get("ext", "")).lower()
+        vcodec = str(f.get("vcodec", "")).lower()
+        acodec = str(f.get("acodec", "")).lower()
+
+        is_audio_only = (vcodec == "none" or not vcodec) and acodec != "none"
+        is_video = vcodec != "none" and vcodec != ""
+
+        if is_audio_only:
+            if ext == "m4a":
+                m4a_audios.append(f)
+            elif ext in ("webm", "opus"):
+                webm_audios.append(f)
+            else:
+                other_audios.append(f)
+        elif is_video:
+            if ext == "mp4":
+                mp4_videos.append(f)
+            elif ext == "webm":
+                webm_videos.append(f)
+            else:
+                other_videos.append(f)
+
+    # Sort videos by resolution (height/width) and bitrate descending
+    def sort_video_key(item):
+        return (item.get("height") or 0, item.get("width") or 0, item.get("tbr") or item.get("vbr") or 0)
+
+    # Sort audio by bitrate descending
+    def sort_audio_key(item):
+        return (item.get("abr") or item.get("tbr") or 0)
+
+    mp4_videos.sort(key=sort_video_key, reverse=True)
+    webm_videos.sort(key=sort_video_key, reverse=True)
+    other_videos.sort(key=sort_video_key, reverse=True)
+    m4a_audios.sort(key=sort_audio_key, reverse=True)
+    webm_audios.sort(key=sort_audio_key, reverse=True)
+    other_audios.sort(key=sort_audio_key, reverse=True)
+
+    def get_size_str(f):
+        sz = f.get("filesize") or f.get("filesize_approx")
+        if sz:
+            mb = sz / (1024 * 1024)
+            if mb >= 1024:
+                return f"{mb/1024:.2f} GiB"
+            return f"{mb:.2f} MiB"
+        return "N/A"
+
+    def print_video_table(title, items):
+        if not items:
+            return
+        print(f"{WHITE}[{title}]{RESET}")
+        header = f"  {'ID':<10} {'EXT':<6} {'RESOLUTION':<14} {'FPS':<6} {'FILESIZE':<12} {'CODEC':<18} {'NOTE'}"
+        print(f"{CYAN}{header}{RESET}")
+        print(f"{CYAN}  " + "-" * 78 + f"{RESET}")
+        for f in items:
+            fid = str(f.get("format_id", ""))
+            ext = str(f.get("ext", ""))
+            w = f.get("width")
+            h = f.get("height")
+            res = f"{w}x{h}" if w and h else (f.get("resolution") or "N/A")
+            fps_val = f.get("fps")
+            fps = f"{int(fps_val)}fps" if fps_val else "N/A"
+            size = get_size_str(f)
+            vcodec = (f.get("vcodec") or "N/A").split(".")[0]
+            note = f.get("format_note") or ""
+            
+            line = f"  {fid:<10} {ext:<6} {res:<14} {fps:<6} {size:<12} {vcodec:<18} {note}"
+            print(f"{CYAN}{line}{RESET}")
+        print()
+
+    def print_audio_table(title, items):
+        if not items:
+            return
+        print(f"{WHITE}[{title}]{RESET}")
+        header = f"  {'ID':<10} {'EXT':<6} {'BITRATE':<12} {'FILESIZE':<12} {'CODEC':<18} {'NOTE'}"
+        print(f"{CYAN}{header}{RESET}")
+        print(f"{CYAN}  " + "-" * 72 + f"{RESET}")
+        for f in items:
+            fid = str(f.get("format_id", ""))
+            ext = str(f.get("ext", ""))
+            abr = f.get("abr") or f.get("tbr")
+            bitrate = f"{int(abr)}k" if abr else "N/A"
+            size = get_size_str(f)
+            acodec = (f.get("acodec") or "N/A").split(".")[0]
+            note = f.get("format_note") or ""
+            
+            line = f"  {fid:<10} {ext:<6} {bitrate:<12} {size:<12} {acodec:<18} {note}"
+            print(f"{CYAN}{line}{RESET}")
+        print()
+
+    print_video_table("mp4 video options", mp4_videos)
+    print_video_table("webm video options", webm_videos)
+    if other_videos:
+        print_video_table("other video options", other_videos)
+        
+    print_audio_table("m4a audio options", m4a_audios)
+    print_audio_table("webm audio options", webm_audios)
+    if other_audios:
+        print_audio_table("other audio options", other_audios)
+
+    return True
 
 
 def action_custom():
     if not ensure_ytdlp_exists():
         return
 
-    clear()
-    print_header("CUSTOM FORMAT / RESOLUTION")
-    url = input("Enter Video URL: ").strip()
+    urls = prompt_urls_input("CUSTOM FORMAT / RESOLUTION")
+    if not urls:
+        return
+
     print()
     print(f"{YELLOW}[INFO] Fetching available formats...{WHITE}")
     print()
-    result = subprocess.run([str(YTDLP), "-F", url], capture_output=True, text=True)
-    output = (result.stdout or "") + (result.stderr or "")
-    if output.strip():
-        widest_line = max((len(l) for l in output.splitlines()), default=CONSOLE_COLS)
-        needed_cols = widest_line + 4
-        if needed_cols > CONSOLE_COLS:
-            maximize_console()
-        lblock(output.strip())
+
+    # Try formatted JSON display first
+    success = display_custom_formats(urls[0])
+
+    # Fallback to standard yt-dlp -F output if JSON extraction fails
+    if not success:
+        result = subprocess.run([str(YTDLP), "-F", urls[0]], capture_output=True, text=True)
+        output = (result.stdout or "") + (result.stderr or "")
+        if output.strip():
+            widest_line = max((len(l) for l in output.splitlines()), default=CONSOLE_COLS)
+            needed_cols = widest_line + 4
+            if needed_cols > CONSOLE_COLS:
+                maximize_console()
+            lblock(output.strip())
+
     print()
-    fmt = input("Enter desired format code (e.g., 137+140 or best): ").strip()
+    fmt = input("Enter desired format code (e.g., 137+140 or best) or select option [0]: ").strip()
     
     restore_console()
     
-    download_with_bar(url, "CUSTOM FORMAT / RESOLUTION",
-                       ["-f", fmt, "--merge-output-format", "mp4"])
+    if not fmt or fmt == "0":
+        return
+
+    download_batch_with_bar(urls, "CUSTOM FORMAT / RESOLUTION",
+                           ["-f", fmt])
 
 
 # --- Updates & Dependency Management ---
@@ -453,6 +695,7 @@ def get_local_ffmpeg_version():
             first_line = res.stdout.splitlines()[0] if res.stdout else ""
             parts = first_line.split()
             if len(parts) >= 3 and parts[1].lower() == "version":
+                # Strips GyanD extra suffixes like '-essentials_build...' to leave clean version '8.1.2'
                 return parts[2].split("-")[0]
             return "installed"
         return "installed"
@@ -461,40 +704,54 @@ def get_local_ffmpeg_version():
 
 
 def fetch_latest_release_tag(repo_path):
-    """Fetch latest release tag from GitHub API."""
     url = f"https://api.github.com/repos/{repo_path}/releases/latest"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=4) as resp:
+        # Create resilient SSL context
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        req = urllib.request.Request(
+            url, 
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        )
+        # Increased timeout to 8s to handle sequential menu calls smoothly
+        with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
             data = json.loads(resp.read().decode())
             return data.get("tag_name", "Available")
+            
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return "No Release"  # Repo exists, but no official release tag was created yet
+        return "Unavailable"
     except Exception:
         return "Unavailable"
 
 
 def format_update_status(local_ver, latest_tag):
-    """Format status indicator string for UI."""
-    if latest_tag == "Unavailable":
-        return "Unavailable"
+    if latest_tag in ("Unavailable", "No Release"):
+        return latest_tag
 
-    clean_local = local_ver.lstrip("v").strip()
-    clean_latest = latest_tag.lstrip("v").strip()
+    clean_local = local_ver.lstrip("v").split("-")[0].strip()
+    clean_latest = latest_tag.lstrip("v").split("-")[0].strip()
 
     if clean_local == clean_latest:
-        return "Unavailable"
+        return "Up to date"
 
-    return latest_tag
+    return latest_tag if latest_tag.startswith("v") else f"v{latest_tag}"
 
 
 def action_install_update_menu():
     while True:
         clear()
-        print_header("Install / Update")
+        print_header_simple("Install / Update")
+        print(f"{YELLOW}   [INFO] Fetching latest versions from GitHub...{WHITE}\n")
         
         yt_local = get_local_ytdlp_version()
         ff_local = get_local_ffmpeg_version()
         app_local = CURRENT_VERSION
         
+        # Fetch tags
         yt_latest = fetch_latest_release_tag("yt-dlp/yt-dlp")
         ff_latest = fetch_latest_release_tag("GyanD/codexffmpeg")
         app_latest = fetch_latest_release_tag(f"{REPO_OWNER}/{REPO_NAME}")
@@ -503,17 +760,29 @@ def action_install_update_menu():
         ff_status = format_update_status(ff_local, ff_latest)
         app_status = format_update_status(app_local, app_latest)
 
+        def fmt_ver(ver):
+            if "not found" in ver.lower() or ver == "installed":
+                return ver
+            return ver if ver.startswith("v") else f"v{ver}"
+
+        yt_disp = fmt_ver(yt_local)
+        ff_disp = fmt_ver(ff_local)
+        app_disp = fmt_ver(app_local)
+
+        clear()
+        print_header_simple("Install / Update")
+
         menu_content = (
             f" Current versions                  Latest versions\n"
             f"------------------                ------------------\n"
             f"[1] yt-dlp                          ({yt_status})\n"
-            f"    {yt_local:<24}\n"
+            f"    {yt_disp:<24}\n"
             f"\n"
             f"[2] FFmpeg                          ({ff_status})\n"
-            f"    {ff_local:<24}\n"
+            f"    {ff_disp:<24}\n"
             f"\n"
             f"[3] My Downloader                   ({app_status})\n"
-            f"    v{app_local:<21}\n"
+            f"    {app_disp:<24}\n"
             f"===================================================\n"
             f"        Select [0] to go back to main menu"
         )
@@ -524,7 +793,6 @@ def action_install_update_menu():
         choice = input("        Select an option (0-3): ").strip()
         
         if choice == "0":
-            check_for_updates()
             break
         elif choice == "1":
             action_update_ytdlp()
@@ -540,7 +808,7 @@ def action_install_update_menu():
 
 def action_update_ytdlp():
     clear()
-    print_header("UPDATING YT-DLP")
+    print_header_simple("UPDATING YT-DLP")
     if not YTDLP.exists():
         print(f"{YELLOW}[INFO] yt-dlp not found in bin folder. Installing automatically...{WHITE}")
     else:
@@ -561,12 +829,13 @@ def action_update_ytdlp():
         print()
         print(f"{RED}[ERROR] Update failed. Check your connection. ({e}){WHITE}")
     print()
+    flush_input()
     input("Press Enter to continue...")
 
 
 def action_update_ffmpeg():
     clear()
-    print_header("UPDATING FFMPEG")
+    print_header_simple("UPDATING FFMPEG")
     ffmpeg_exe = BIN_DIR / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
     if not ffmpeg_exe.exists():
         print(f"{YELLOW}[INFO] FFmpeg not found in bin folder. Installing automatically...{WHITE}")
@@ -609,6 +878,7 @@ def action_update_ffmpeg():
     except Exception as e:
         print(f"{RED}[ERROR] FFmpeg update failed. Check your connection. ({e}){WHITE}")
         print()
+        flush_input()
         input("Press Enter to continue...")
         return
 
@@ -617,12 +887,13 @@ def action_update_ffmpeg():
     else:
         print(f"{RED}[ERROR] FFmpeg installation failed.{WHITE}")
     print()
+    flush_input()
     input("Press Enter to continue...")
 
 
 def action_update():
     clear()
-    print_header("UPDATING MY DOWNLOADER")
+    print_header_simple("UPDATING MY DOWNLOADER")
     print(f"{YELLOW}[INFO] Checking for latest release on GitHub...{WHITE}")
     print()
 
@@ -663,16 +934,17 @@ def action_update():
         current_exe = Path(sys.executable).resolve() if is_frozen else (base_folder / GITHUB_EXE_FILENAME)
         target_exe = base_folder / GITHUB_EXE_FILENAME
 
-        # Rename running EXE to bypass Windows file locking
         if current_exe.exists():
             old_exe = base_folder / f"My Downloader.old.{int(time.time())}.exe"
             current_exe.rename(old_exe)
 
         temp_exe.rename(target_exe)
-
-        # Relaunch new EXE via explorer.exe to avoid blocking
-        subprocess.Popen(["explorer.exe", str(target_exe.resolve())])
-
+        
+        # Native execution restart
+        if os.name == "nt":
+            os.startfile(str(target_exe.resolve()))
+        else:
+            subprocess.Popen([str(target_exe.resolve())])
         os._exit(0)
 
     except Exception as e:
@@ -680,12 +952,12 @@ def action_update():
         print(f"{RED}[ERROR] Self-update failed: {e}{WHITE}")
         print(f"{YELLOW}[INFO] Verify internet connection and check GitHub releases.{WHITE}")
         print()
+        flush_input()
         input("Press Enter to continue...")
 
 
 # --- Startup Update Checks ---
 def is_update_needed(local_ver, latest_tag):
-    """Determine if a component is missing or outdated."""
     if "not found" in local_ver.lower():
         return True
     
@@ -698,7 +970,6 @@ def is_update_needed(local_ver, latest_tag):
 
 
 def check_for_updates():
-    """Verify local files and remote releases."""
     global UPDATE_AVAILABLE
     try:
         ffmpeg_exe = BIN_DIR / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
@@ -768,7 +1039,6 @@ def action_exit():
 
 # --- Main Application Entry ---
 def cleanup_old_update_files():
-    """Remove leftover .old.exe files from previous updates."""
     for old_file in get_base_dir().glob("My Downloader.old.*.exe"):
         for attempt in range(5):
             try:
@@ -785,7 +1055,9 @@ def main():
     print(WHITE, end="")
 
     cleanup_old_update_files()
-    check_for_updates()
+    
+    # Run update check in background thread so app launches instantly
+    threading.Thread(target=check_for_updates, daemon=True).start()
 
     actions = {
         "1": action_video_mkv,
