@@ -21,4 +21,4 @@ COPY . .
 
 # Interactive console menu (uses input()) -- must run with `docker run -it`
 # or `docker compose run`, not detached.
-CMD ["python", "MyDownloader_2_4_8_4.py"]
+CMD ["python", "MyDownloader.py"]
