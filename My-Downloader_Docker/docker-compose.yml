@@ -1,0 +1,22 @@
+# Place this at the root of your repo as: docker-compose.yml
+#
+# Usage:
+#   docker compose run --rm app
+#
+# --rm cleans up the container after you exit the menu (choose Quit / Ctrl+C).
+# Re-running is fast since the image only rebuilds when the Dockerfile or
+# apt packages change -- your .py edits are picked up instantly via the
+# volume mount below, no rebuild needed.
+
+services:
+  app:
+    build: .
+    stdin_open: true   # equivalent to -i
+    tty: true           # equivalent to -t -- required, this is an input()-driven menu
+    volumes:
+      # Live-mounts your actual source folder into the container. Edit the
+      # .py file on your host in VS Code, then just re-run `docker compose
+      # run --rm app` -- no rebuild needed for code changes (only needed if
+      # you change the Dockerfile itself, e.g. adding an apt package).
+      - .:/app
+    working_dir: /app
