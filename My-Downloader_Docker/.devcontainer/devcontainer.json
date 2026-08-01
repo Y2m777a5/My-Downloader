@@ -1,0 +1,17 @@
+// Place this at: .devcontainer/devcontainer.json
+{
+  "name": "My Downloader (Linux test env)",
+  "build": {
+    "context": "..",
+    "dockerfile": "../Dockerfile"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python"]
+    }
+  },
+  // Keeps the container alive after build instead of running the app
+  // immediately and exiting -- lets you open a terminal and run/re-run
+  // `python MyDownloader_2_4_8_4.py` on demand, as many times as you want.
+  "overrideCommand": true
+}
