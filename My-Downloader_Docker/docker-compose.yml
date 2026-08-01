@@ -1,22 +1,20 @@
-# Place this at the root of your repo as: docker-compose.yml
+# Place this at: My-Downloader_Docker/docker-compose.yml
 #
-# Usage:
+# Usage (run from inside the My-Downloader_Docker folder):
 #   docker compose run --rm app
 #
-# --rm cleans up the container after you exit the menu (choose Quit / Ctrl+C).
-# Re-running is fast since the image only rebuilds when the Dockerfile or
-# apt packages change -- your .py edits are picked up instantly via the
-# volume mount below, no rebuild needed.
+# --rm cleans up the container after you exit. Your .py edits at the repo
+# root are picked up live via the volume mount -- no rebuild needed unless
+# you change the Dockerfile itself.
+
 
 services:
   app:
-    build: .
+    build:
+      context: ..                        # repo root, one level up -- where MyDownloader.py actually lives
+      dockerfile: My-Downloader_Docker/Dockerfile
     stdin_open: true   # equivalent to -i
     tty: true           # equivalent to -t -- required, this is an input()-driven menu
     volumes:
-      # Live-mounts your actual source folder into the container. Edit the
-      # .py file on your host in VS Code, then just re-run `docker compose
-      # run --rm app` -- no rebuild needed for code changes (only needed if
-      # you change the Dockerfile itself, e.g. adding an apt package).
-      - .:/app
+      - ..:/app          # live-mounts the whole repo root, not just this subfolder
     working_dir: /app
