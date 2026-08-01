@@ -1232,10 +1232,10 @@ def action_exit():
 """
     cblock(f"{DEFAULT_COLOR}{logo}")
     print(f"{WHITE}")
-    
     cline("  ♥ THANK YOU FOR USING ♥")
     print(f"{DEFAULT_COLOR}")
     cline("Git handle: Y2m777a5 | Git Repo: github.com/Y2m777a5/My-Downloader")
+    print(f"{WHITE}")
     
     time.sleep(3)
     sys.exit()
