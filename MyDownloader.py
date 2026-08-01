@@ -8,12 +8,7 @@ Requires:
 Run with:  python downloader.py
 """
 
-# --- Configuration & Metadata ---
-VERSION = "2.4.8.4"
-CURRENT_VERSION = VERSION
-REPO_OWNER = "Y2m777a5"
-REPO_NAME = "My-Downloader"       
-GITHUB_EXE_FILENAME = "My Downloader.exe"
+from __future__ import annotations
 
 import os
 import ssl
@@ -42,23 +37,18 @@ try:
 except ImportError:
     ctypes = None
 
+# --- Configuration & Metadata ---
+VERSION = "2.4.8.4"
+CURRENT_VERSION = VERSION
+REPO_OWNER = "Y2m777a5"
+REPO_NAME = "My-Downloader"       
+GITHUB_EXE_FILENAME = "My Downloader.exe"
+
 # Default console dimensions
 CONSOLE_COLS = 120
 CONSOLE_LINES = 40
 MAX_CONSOLE_COLS = 220  # Hard ceiling for screen width
 
-
-def get_base_dir() -> Path:
-    """
-    Returns the absolute directory of the script or compiled executable.
-    Handles both standard Python execution and PyInstaller frozen bundles.
-    """
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
-
-
-# --- ANSI Color Palette Definitions ---
 WHITE = "\033[97m"
 RED = "\033[91m"
 YELLOW = "\033[93m"
@@ -67,42 +57,53 @@ GREEN = "\033[38;2;0;254;0m"
 RESET = "\033[0m"
 DEFAULT_COLOR = "\033[38;2;238;128;32m"
 
-# Application Path Setup
+def get_base_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
 BASE_DIR = get_base_dir()
 BIN_DIR = BASE_DIR / "bin"
 OUT_DIR = BASE_DIR / "Downloads"
 YTDLP = BIN_DIR / ("yt-dlp.exe" if os.name == "nt" else "yt-dlp")
 
-# Create missing runtime directories
 OUT_DIR.mkdir(exist_ok=True)
 BIN_DIR.mkdir(exist_ok=True)
 
-# Global flag to track available updates across components
 UPDATE_AVAILABLE = False
 
-# Visual Progress Bar Elements
 FULL = "█" * 25
 EMPTY = "░" * 25
 
 
-# --- Global SSL Context Helper ---
+# --- SSL Utilities ---
+
 def create_secure_ssl_context() -> ssl.SSLContext:
-    """
-    Creates an SSL context that attempts standard certificate validation,
-    falling back to unverified mode if local OS/Python CA bundles are missing.
-    """
+    # Note: create_default_context() essentially never raises on its own --
+    # a broken/missing CA bundle only surfaces later, as SSLCertVerificationError
+    # from urlopen(). Don't wrap this in try/except expecting it to catch that.
+    return ssl.create_default_context()
+
+
+def create_insecure_ssl_context() -> ssl.SSLContext:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_client)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def urlopen_with_fallback(req, ctx, timeout=30):
     try:
-        return ssl.create_default_context()
-    except Exception:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        return ctx
+        return urllib.request.urlopen(req, context=ctx, timeout=timeout)
+    except ssl.SSLCertVerificationError:
+        print(f"{YELLOW}[WARNING] Certificate verification failed; retrying with an unverified connection.{WHITE}")
+        insecure_ctx = create_insecure_ssl_context()
+        return urllib.request.urlopen(req, context=insecure_ctx, timeout=timeout)
 
 
-# --- Terminal Input Management ---
+# --- Input & Console Helpers ---
+
 def flush_input():
-    """Flushes queued extra keypresses or trailing newlines from the terminal buffer."""
     if msvcrt:
         while msvcrt.kbhit():
             try:
@@ -119,10 +120,6 @@ def flush_input():
 
 
 def check_q_pressed() -> bool:
-    """
-    Non-blocking keyboard check to determine if 'Q' or 'q' was pressed.
-    Used for user-initiated download cancellations.
-    """
     if msvcrt:
         if msvcrt.kbhit():
             try:
@@ -143,16 +140,13 @@ def check_q_pressed() -> bool:
     return False
 
 
-# --- Terminal Layout & Windows Console Controls ---
 def setup_console():
-    """Initializes ANSI escape code support in Windows CMD and applies standard sizing."""
     if os.name == "nt":
-        os.system("")  # Triggers VT100 native ANSI escape code processing on Windows
+        os.system("")
         resize_console(CONSOLE_COLS, CONSOLE_LINES)
 
 
 def resize_console(cols: int, lines: int = CONSOLE_LINES):
-    """Resizes the console buffer window (Windows only) within bounded dimensions."""
     if os.name != "nt":
         return
     cols = max(80, min(cols, MAX_CONSOLE_COLS))
@@ -161,7 +155,6 @@ def resize_console(cols: int, lines: int = CONSOLE_LINES):
 
 
 def maximize_console():
-    """Maximizes the console window using Win32 API calls."""
     if os.name != "nt" or ctypes is None:
         return
     try:
@@ -169,13 +162,12 @@ def maximize_console():
         user32 = ctypes.windll.user32
         hwnd = kernel32.GetConsoleWindow()
         if hwnd:
-            user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
+            user32.ShowWindow(hwnd, 3)
     except Exception:
         pass
 
 
 def restore_console():
-    """Restores the console to default centered bounds."""
     if os.name != "nt" or ctypes is None:
         return
     try:
@@ -183,14 +175,13 @@ def restore_console():
         user32 = ctypes.windll.user32
         hwnd = kernel32.GetConsoleWindow()
         if hwnd:
-            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.ShowWindow(hwnd, 9)
     except Exception:
         pass
     resize_console(CONSOLE_COLS, CONSOLE_LINES)
 
 
 def center_console_window():
-    """Positions the console window directly in the center of the primary display monitor."""
     if ctypes is None:
         return
     try:
@@ -206,30 +197,26 @@ def center_console_window():
         win_w = rect.right - rect.left
         win_h = rect.bottom - rect.top
 
-        screen_w = user32.GetSystemMetrics(0)  # SM_CXSCREEN
-        screen_h = user32.GetSystemMetrics(1)  # SM_CYSCREEN
+        screen_w = user32.GetSystemMetrics(0)
+        screen_h = user32.GetSystemMetrics(1)
 
         x = max((screen_w - win_w) // 2, 0)
         y = max((screen_h - win_h) // 2, 0)
 
-        # SWP_NOSIZE (0x0001) | SWP_NOZORDER (0x0004)
         user32.SetWindowPos(hwnd, 0, x, y, 0, 0, 0x0001 | 0x0004)
     except Exception:
         pass
 
 
 def term_width() -> int:
-    """Retrieves current terminal column width."""
     return shutil.get_terminal_size((CONSOLE_COLS, CONSOLE_LINES)).columns
 
 
 def cline(text: str = ""):
-    """Prints a single line of text centered within the current terminal width."""
     print(text.center(term_width()))
 
 
 def cblock(text: str):
-    """Prints a multiline block of text centered relative to its longest line."""
     width = term_width()
     lines = text.splitlines()
     maxlen = max((len(l) for l in lines), default=0)
@@ -239,18 +226,15 @@ def cblock(text: str):
 
 
 def lblock(text: str):
-    """Prints a multiline block left-aligned."""
     for line in text.splitlines():
         print(line)
 
 
 def clear():
-    """Clears the terminal screen for both Windows and Unix systems."""
     os.system("cls" if os.name == "nt" else "clear")
 
 
 def cleanup_partials():
-    """Removes leftover unfinished download artifacts (.part / .ytdl files)."""
     for pattern in ("*.part", "*.ytdl"):
         for f in OUT_DIR.glob(pattern):
             try:
@@ -259,8 +243,9 @@ def cleanup_partials():
                 pass
 
 
+# --- UI Elements ---
+
 def print_header_prompt(title: str):
-    """Renders menu prompt header for input screens."""
     print()
     lines = [
         "----------------------------------------------------",
@@ -276,7 +261,6 @@ def print_header_prompt(title: str):
 
 
 def print_header_simple(title: str):
-    """Renders menu section header."""
     print()
     lines = [
         "----------------------------------------------------",
@@ -288,7 +272,6 @@ def print_header_simple(title: str):
 
 
 def print_logo():
-    """Renders ASCII logo banner."""
     logo = r"""
  __  __         ____                      _                 _           
 |  \/  |_   _  |  _ \  _____      ___ __ | | ___   __ _  __| | ___ _ __ 
@@ -301,7 +284,6 @@ def print_logo():
 
 
 def print_menu():
-    """Renders the main interactive interface."""
     clear()
     cleanup_partials()
     print()
@@ -316,7 +298,7 @@ def print_menu():
         "====================================================",
         " [1] Download Video (Best Quality - MKV)",
         " [2] Download Video (Best Quality - MP4)",
-        " [3] Download Audio Only (MP3)",
+        " [3] Download Audio (Best Quality - MP3)",
         " [4] Download Custom (Advance download)",
         install_option,
         " [6] Exit",
@@ -334,9 +316,9 @@ def print_menu():
     print(f"\n\n{WHITE}")
 
 
-# --- Media Download Processing ---
+# --- Execution & Downloading ---
+
 def ensure_ytdlp_exists() -> bool:
-    """Validates presence of binary dependency before execution."""
     if not YTDLP.exists():
         print(f"{RED}[ERROR] yt-dlp was not found in the 'bin' directory!{WHITE}")
         print(f"{YELLOW}[INFO] Please run Option [5] (Install / Update) first.{WHITE}\n")
@@ -347,7 +329,6 @@ def ensure_ytdlp_exists() -> bool:
 
 
 def prompt_urls_input(title: str) -> list[str]:
-    """Prompts the user for target URLs and handles action confirmation."""
     clear()
     print_header_prompt(title)
     
@@ -359,7 +340,6 @@ def prompt_urls_input(title: str) -> list[str]:
         time.sleep(1)
         return []
 
-    # Parse whitespace/comma delimited input strings into distinct URLs
     urls = [u.strip() for u in raw_input.replace(",", " ").split() if u.strip()]
 
     for idx, u in enumerate(urls, 1):
@@ -378,10 +358,6 @@ def prompt_urls_input(title: str) -> list[str]:
 
 
 def download_batch_with_bar(urls: list[str], title: str, extra_args: list[str]):
-    """
-    Executes yt-dlp subprocess tasks with real-time output parsing 
-    and custom multi-line progress rendering.
-    """
     if not ensure_ytdlp_exists() or not urls:
         return
 
@@ -394,8 +370,7 @@ def download_batch_with_bar(urls: list[str], title: str, extra_args: list[str]):
     failed_count = 0
 
     for idx, url in enumerate(urls, 1):
-        # Dedicated temp log file for progress monitoring
-        log_path = Path(tempfile.gettempdir()) / f"ytdlp_progress_{idx}.txt"
+        log_path = Path(tempfile.gettempdir()) / f"ytdlp_progress_{os.getpid()}_{idx}.txt"
         if log_path.exists():
             try:
                 log_path.unlink()
@@ -406,7 +381,7 @@ def download_batch_with_bar(urls: list[str], title: str, extra_args: list[str]):
             str(YTDLP),
             "--ffmpeg-location", str(BIN_DIR),
             "--no-colors",
-            "-N", "8",  # (Opens 8 threads for video/audio streams)
+            "-N", "8",
             *extra_args,
             "--newline",
             "--progress-template", "PG|%(progress._percent_str)s",
@@ -426,7 +401,6 @@ def download_batch_with_bar(urls: list[str], title: str, extra_args: list[str]):
 
         try:
             while True:
-                # Check for user cancellation request
                 if check_q_pressed():
                     proc.terminate()
                     try:
@@ -454,7 +428,6 @@ def download_batch_with_bar(urls: list[str], title: str, extra_args: list[str]):
         if log_path.exists():
             content = log_path.read_text(encoding="utf-8", errors="ignore")
 
-        # Visual progress updates via ANSI cursor manipulation (\033[2A = up 2 lines)
         if canceled:
             sys.stdout.write("\033[2A\r")
             sys.stdout.write(f"\033[K{CYAN}Progress:  [{FULL[:max(0, last_pct)//4] + EMPTY[:25-max(0, last_pct)//4]}] {max(0, last_pct)}%\033[0m\n")
@@ -488,7 +461,6 @@ def download_batch_with_bar(urls: list[str], title: str, extra_args: list[str]):
 
 
 def read_progress(log_path: Path) -> int:
-    """Parses percent value from the progress log file."""
     pct = 0
     if log_path.exists():
         try:
@@ -506,7 +478,6 @@ def read_progress(log_path: Path) -> int:
 
 
 def draw_progress(pct: int):
-    """Overwrites progress bar line using ANSI terminal escape sequences."""
     filled = pct // 4
     bar = FULL[:filled] + EMPTY[:25 - filled]
     sys.stdout.write(f"\033[2A\r{CYAN}Progress:  [{bar}] {pct}%\033[0m\033[K\n\033[1B")
@@ -514,7 +485,6 @@ def draw_progress(pct: int):
 
 
 def cleanup_log(log_path: Path):
-    """Safely deletes temporary process log files."""
     try:
         if log_path.exists():
             log_path.unlink()
@@ -523,7 +493,6 @@ def cleanup_log(log_path: Path):
 
 
 def action_video_mkv():
-    """Download best available video/audio streams into MKV container."""
     urls = prompt_urls_input("DOWNLOAD BEST QUALITY (MKV)")
     if not urls:
         return
@@ -532,7 +501,6 @@ def action_video_mkv():
 
 
 def action_video_mp4():
-    """Download best available video/audio streams into MP4 container."""
     urls = prompt_urls_input("DOWNLOAD BEST QUALITY (MP4)")
     if not urls:
         return
@@ -541,20 +509,14 @@ def action_video_mp4():
 
 
 def action_audio():
-    """Extract and convert audio streams into MP3 format at maximum quality (V0)."""
-    urls = prompt_urls_input("DOWNLOAD AUDIO ONLY (MP3)")
+    urls = prompt_urls_input("DOWNLOAD BEST QUALITY (MP3)")
     if not urls:
         return
-    download_batch_with_bar(urls, "DOWNLOAD AUDIO ONLY (MP3)",
+    download_batch_with_bar(urls, "DOWNLOAD BEST QUALITY (MP3)",
                            ["-x", "--audio-format", "mp3", "--audio-quality", "0"])
 
 
-# --- Formatted Custom Format Viewer ---
 def display_custom_formats(url: str) -> bool:
-    """
-    Fetches media metadata using yt-dlp JSON dumping and formats output tables 
-    categorized by stream media types and extensions.
-    """
     cmd = [
         str(YTDLP),
         "--dump-json",
@@ -576,7 +538,6 @@ def display_custom_formats(url: str) -> bool:
     if not raw_formats:
         return False
 
-    # Group formats by type and container format
     mp4_videos, webm_videos, other_videos = [], [], []
     m4a_audios, webm_audios, other_audios = [], [], []
 
@@ -603,7 +564,6 @@ def display_custom_formats(url: str) -> bool:
             else:
                 other_videos.append(f)
 
-    # Sorting keys for organized tabular display
     def sort_video_key(item):
         return (item.get("height") or 0, item.get("width") or 0, item.get("tbr") or item.get("vbr") or 0)
 
@@ -682,7 +642,6 @@ def display_custom_formats(url: str) -> bool:
 
 
 def action_custom():
-    """Allows manual choice of explicit format strings (e.g., 137+140)."""
     if not ensure_ytdlp_exists():
         return
 
@@ -694,10 +653,8 @@ def action_custom():
     print(f"{YELLOW}[INFO] Fetching available formats...{WHITE}")
     print()
 
-    # Attempt structured JSON view first
     success = display_custom_formats(urls[0])
 
-    # Fall back to standard yt-dlp tabular view if JSON parsing fails
     if not success:
         result = subprocess.run([str(YTDLP), "-F", urls[0]], capture_output=True, text=True)
         output = (result.stdout or "") + (result.stderr or "")
@@ -709,9 +666,10 @@ def action_custom():
             lblock(output.strip())
 
     print()
-    fmt = input("Enter desired format code (e.g., 137+140 or best) or select option [0]: ").strip()
-    
-    restore_console()
+    try:
+        fmt = input("Enter desired format code (e.g., 137+140 or best) or select option [0]: ").strip()
+    finally:
+        restore_console()
     
     if not fmt or fmt == "0":
         return
@@ -719,9 +677,9 @@ def action_custom():
     download_batch_with_bar(urls, "CUSTOM FORMAT / RESOLUTION", ["-f", fmt])
 
 
-# --- Updates & Dependency Management ---
+# --- Updates & Downloads ---
+
 def get_local_ytdlp_version() -> str:
-    """Reads installed yt-dlp version with 6s timeout to account for Antivirus delays."""
     yt_exe = BIN_DIR / ("yt-dlp.exe" if os.name == "nt" else "yt-dlp")
     if not yt_exe.exists():
         return "[File not found: install]"
@@ -740,7 +698,6 @@ def get_local_ytdlp_version() -> str:
 
 
 def get_local_ffmpeg_version() -> str:
-    """Reads installed FFmpeg build version string."""
     ffmpeg_exe = BIN_DIR / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
     if not ffmpeg_exe.exists():
         return "[File not found: install]"
@@ -763,10 +720,6 @@ def get_local_ffmpeg_version() -> str:
 
 
 def fetch_latest_release_tag(repo_path: str) -> str:
-    """
-    Retrieves latest GitHub release tag via standard browser HTTP HEAD redirect tracking.
-    Bypasses GitHub API rate-limiting rules (api.github.com's 60 req/hr ceiling).
-    """
     url = f"https://github.com/{repo_path}/releases/latest"
     try:
         req = urllib.request.Request(
@@ -775,7 +728,7 @@ def fetch_latest_release_tag(repo_path: str) -> str:
             method="HEAD",
         )
         ctx = create_secure_ssl_context()
-        with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+        with urlopen_with_fallback(req, ctx, timeout=8) as resp:
             final_url = resp.geturl()
 
         if "/releases/tag/" in final_url:
@@ -795,13 +748,11 @@ def fetch_latest_release_tag(repo_path: str) -> str:
         return "Unavailable"
 
 
-# Temporary runtime cache to prevent redundant HTTP requests within 5 minutes
 _RELEASE_CACHE = {}
 CACHE_TTL_SECONDS = 300
 
 
 def get_cached_release_tag(repo_path: str, force: bool = False) -> str:
-    """Retrieves cached release tags or forces an updated remote check."""
     now = time.time()
     cached = _RELEASE_CACHE.get(repo_path)
     if not force and cached and (now - cached[1] < CACHE_TTL_SECONDS):
@@ -812,7 +763,6 @@ def get_cached_release_tag(repo_path: str, force: bool = False) -> str:
 
 
 def format_update_status(local_ver: str, latest_tag: str) -> str:
-    """Formally formats version strings for display in update menus."""
     non_version_statuses = ("Unavailable", "No Release", "Rate Limited", "No Internet")
     if latest_tag in non_version_statuses or latest_tag.startswith("HTTP "):
         return latest_tag
@@ -830,7 +780,6 @@ def format_update_status(local_ver: str, latest_tag: str) -> str:
 
 
 def action_install_update_menu():
-    """Renders update status dashboard for dependencies and application."""
     refresh = True
     while True:
         if refresh:
@@ -906,49 +855,68 @@ def action_install_update_menu():
             time.sleep(1)
 
 
+class RangeNotSupportedError(Exception):
+    pass
+
+
 def download_chunk(url, start_byte, end_byte, part_num, temp_dir, ctx, progress_lock, progress_data):
-    """Downloads a specific byte range of the file into a temporary part file."""
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Range": f"bytes={start_byte}-{end_byte}"
     }
-    req = urllib.request.Request(url, headers=headers)
     part_file = temp_dir / f"part_{part_num}.tmp"
     
-    with urllib.request.urlopen(req, context=ctx, timeout=30) as resp, open(part_file, "wb") as f:
-        while True:
-            chunk = resp.read(65536)
-            if not chunk:
-                break
-            f.write(chunk)
-            with progress_lock:
-                progress_data["downloaded"] += len(chunk)
-                
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urlopen_with_fallback(req, ctx, timeout=30) as resp, open(part_file, "wb") as f:
+                # A server that doesn't actually honor Range requests will
+                # return 200 (the full file) instead of 206 (just this
+                # slice). Silently accepting that would mean every "chunk"
+                # contains the entire file, and concatenating them afterward
+                # would produce a corrupted, N-times-too-large output with
+                # no visible error. Fail loudly instead so the caller can
+                # fall back to a single-threaded download.
+                if resp.status != 206:
+                    raise RangeNotSupportedError(
+                        f"Server returned {resp.status} instead of 206 for a ranged request."
+                    )
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    with progress_lock:
+                        progress_data["downloaded"] += len(chunk)
+            return part_file, start_byte
+        except RangeNotSupportedError:
+            raise
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(0.5)
+            
     return part_file, start_byte
 
 
 def download_with_progress(url, dest_path, ctx, label="Downloading", num_threads=4, timeout=30):
-    """Multi-threaded downloader using HTTP Range requests with robust fallbacks."""
     total = None
     accept_ranges = False
 
-    # Safe probe using HEAD request to detect file size & range support
     try:
         req_head = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}, method="HEAD")
-        with urllib.request.urlopen(req_head, context=ctx, timeout=timeout) as resp:
+        with urlopen_with_fallback(req_head, ctx, timeout=timeout) as resp:
             content_length = resp.getheader("Content-Length")
             ranges_header = resp.getheader("Accept-Ranges", "").lower()
             if content_length:
                 total = int(content_length)
-            if ranges_header and ranges_header != "none":
+            if content_length and ranges_header != "none":
                 accept_ranges = True
     except Exception:
-        # Fallback cleanly if HEAD is rejected by CDN/GitHub
         total = None
         accept_ranges = False
 
-    # Fallback to single thread if server doesn't report size or range support
-    if not total or not accept_ranges or total < 1024 * 1024:  # Files < 1MB use 1 thread
+    if not total or not accept_ranges or total < 1024 * 1024:
         num_threads = 1
 
     chunk_size = total // num_threads if total else 0
@@ -965,7 +933,6 @@ def download_with_progress(url, dest_path, ctx, label="Downloading", num_threads
     temp_dir = Path(tempfile.mkdtemp())
 
     def update_ui():
-        """Background loop for clean UI rendering."""
         first_draw = True
         while not progress_data["done"]:
             mb = progress_data["downloaded"] / (1024 * 1024)
@@ -985,25 +952,36 @@ def download_with_progress(url, dest_path, ctx, label="Downloading", num_threads
 
     try:
         if num_threads > 1:
-            # Parallel Multi-Thread Download
-            with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-                futures = [
-                    executor.submit(download_chunk, url, r[0], r[1], r[2], temp_dir, ctx, progress_lock, progress_data)
-                    for r in ranges
-                ]
-                results = [f.result() for f in concurrent.futures.as_completed(futures)]
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+                    futures = [
+                        executor.submit(download_chunk, url, r[0], r[1], r[2], temp_dir, ctx, progress_lock, progress_data)
+                        for r in ranges
+                    ]
+                    results = [f.result() for f in concurrent.futures.as_completed(futures)]
 
-            # Assemble chunks back into final file in correct order
-            results.sort(key=lambda x: x[1])
-            with open(dest_path, "wb") as final_file:
-                for part_path, _ in results:
-                    with open(part_path, "rb") as pf:
-                        shutil.copyfileobj(pf, final_file)
-                    part_path.unlink(missing_ok=True)
+                results.sort(key=lambda x: x[1])
+                with open(dest_path, "wb") as final_file:
+                    for part_path, _ in results:
+                        with open(part_path, "rb") as pf:
+                            shutil.copyfileobj(pf, final_file)
+                        part_path.unlink(missing_ok=True)
+            except RangeNotSupportedError:
+                for leftover in temp_dir.glob("part_*.tmp"):
+                    leftover.unlink(missing_ok=True)
+                progress_data["downloaded"] = 0
+                req_get = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urlopen_with_fallback(req_get, ctx, timeout=timeout) as resp, open(dest_path, "wb") as f:
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        with progress_lock:
+                            progress_data["downloaded"] += len(chunk)
         else:
-            # Standard Single-Thread Fallback
             req_get = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req_get, context=ctx, timeout=timeout) as resp, open(dest_path, "wb") as f:
+            with urlopen_with_fallback(req_get, ctx, timeout=timeout) as resp, open(dest_path, "wb") as f:
                 while True:
                     chunk = resp.read(65536)
                     if not chunk:
@@ -1014,10 +992,9 @@ def download_with_progress(url, dest_path, ctx, label="Downloading", num_threads
 
     finally:
         progress_data["done"] = True
-        ui_thread.join(timeout=1.0)  # Cleanly stop UI thread before proceeding
+        ui_thread.join(timeout=1.0)
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-    # Output final progress confirmation line
     if total:
         total_mb = total / (1024 * 1024)
         sys.stdout.write(f"\033[1A\r\033[K{CYAN}{label}: {total_mb:.1f} / {total_mb:.1f} MB (100%){WHITE}   \n")
@@ -1025,7 +1002,6 @@ def download_with_progress(url, dest_path, ctx, label="Downloading", num_threads
 
 
 def action_update_ytdlp():
-    """Downloads latest yt-dlp executable directly from GitHub releases."""
     clear()
     print_header_simple("UPDATING YT-DLP")
     if not YTDLP.exists():
@@ -1052,7 +1028,6 @@ def action_update_ytdlp():
 
 
 def action_update_ffmpeg():
-    """Downloads and extracts latest Gyan.dev FFmpeg Essentials zip build."""
     clear()
     print_header_simple("UPDATING FFMPEG")
     ffmpeg_exe = BIN_DIR / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
@@ -1077,7 +1052,6 @@ def action_update_ffmpeg():
         with zipfile.ZipFile(zip_path, "r") as zf:
             zf.extractall(extract_dir)
 
-        # Locate binaries nested inside archive folder structure
         bin_folder = None
         for path in extract_dir.rglob("ffmpeg.exe" if os.name == "nt" else "ffmpeg"):
             bin_folder = path.parent
@@ -1111,7 +1085,6 @@ def action_update_ffmpeg():
 
 
 def action_update():
-    """Performs self-update of application binary via atomic file replacement."""
     clear()
     print_header_simple("UPDATING MY DOWNLOADER")
     print(f"{YELLOW}[INFO] Checking for latest release on GitHub...{WHITE}")
@@ -1124,10 +1097,9 @@ def action_update():
         req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
         ctx = create_secure_ssl_context()
 
-        with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+        with urlopen_with_fallback(req, ctx, timeout=8) as resp:
             release_data = json.loads(resp.read().decode())
 
-        # Look for the real asset by exact name first, then fall back to any .exe
         download_url = None
         for asset in release_data.get("assets", []):
             asset_name = asset.get("name", "")
@@ -1141,10 +1113,7 @@ def action_update():
                     break
 
         if not download_url:
-            raise Exception(
-                "No .exe asset found attached to the latest GitHub release. "
-                "Make sure the release has a compiled .exe uploaded to it."
-            )
+            raise Exception("No executable asset found in the latest release.")
 
         print(f"{CYAN}[2/2] Downloading latest binary...")
         base_folder = get_base_dir()
@@ -1160,22 +1129,19 @@ def action_update():
         current_exe = Path(sys.executable).resolve() if is_frozen else (base_folder / GITHUB_EXE_FILENAME)
         target_exe = base_folder / GITHUB_EXE_FILENAME
 
-        # Windows locks active executables; rename running executable first
         if current_exe.exists():
             old_exe = base_folder / f"My Downloader.old.{int(time.time())}.exe"
             current_exe.rename(old_exe)
 
         temp_exe.rename(target_exe)
         
-        # Spawn replacement process and terminate current instance.
-        # IMPORTANT: on Windows this must go through explorer.exe as a
-        # separate subprocess, NOT os.startfile(). os.startfile() calls
-        # ShellExecuteEx synchronously in THIS process, which can block for
-        # several seconds while Windows runs a reputation check on the
-        # freshly created exe before returning control -- making the old
-        # process appear to "hang" for 5-6s before it can reach os._exit().
-        # subprocess.Popen(["explorer.exe", ...]) returns immediately, so
-        # any such check happens inside explorer.exe's own process instead.
+        # IMPORTANT: must go through explorer.exe as a separate subprocess,
+        # NOT os.startfile(). os.startfile() calls ShellExecuteEx
+        # synchronously in THIS process, which can block for several seconds
+        # on a reputation check for the freshly-created exe before returning
+        # control -- making the old process appear to hang for 5-6s before
+        # it can reach os._exit(). This has regressed back to os.startfile()
+        # once before already -- don't "simplify" it back.
         if os.name == "nt":
             subprocess.Popen(["explorer.exe", str(target_exe.resolve())])
         else:
@@ -1191,9 +1157,9 @@ def action_update():
         input("Press Enter to continue...")
 
 
-# --- Startup & Dependency Verification ---
+# --- Version Checks ---
+
 def is_update_needed(local_ver: str, latest_tag: str) -> bool:
-    """Compares version tags to determine update eligibility."""
     if "not found" in local_ver.lower():
         return True
 
@@ -1206,7 +1172,6 @@ def is_update_needed(local_ver: str, latest_tag: str) -> bool:
 
 
 def check_for_updates():
-    """Asynchronously checks for updates to all binaries in background thread."""
     global UPDATE_AVAILABLE
     try:
         ffmpeg_exe = BIN_DIR / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
@@ -1235,9 +1200,9 @@ def check_for_updates():
         UPDATE_AVAILABLE = (not YTDLP.exists()) or (not ffmpeg_exe.exists())
 
 
-# --- Exit Screen ---
+# --- EXIT Page ---
+
 def action_exit():
-    """Displays closing banner and cleans up application runtime."""
     clear()
     logo = r"""
                    ##########                   
@@ -1247,7 +1212,7 @@ def action_exit():
        ##################################       
       ##########++########################      
      #######+------######+--+######+++#####     
-    ###++----------+###+-----####+----+#####    
+    ###++----------+###+-----+####+----+#####    
    ###+------+###--##+--+---+##+-----+#######   
    ##+----+#####+-++--+#+--+#+-----++########   
   #############+-+--+##+--++--++--+###########  
@@ -1270,7 +1235,7 @@ def action_exit():
     
     cline("  ♥ THANK YOU FOR USING ♥")
     print(f"{DEFAULT_COLOR}")
-    cline(f"Git handle: Y2m777a5 | Git Repo: github.com/Y2m777a5/My-Downloader")
+    cline("Git handle: Y2m777a5 | Git Repo: github.com/Y2m777a5/My-Downloader")
     
     time.sleep(3)
     sys.exit()
@@ -1278,7 +1243,6 @@ def action_exit():
 
 # --- Main Application Entry Point ---
 def cleanup_old_update_files():
-    """Deletes old binary backups created during previous self-update cycles."""
     for old_file in get_base_dir().glob("My Downloader.old.*.exe"):
         for attempt in range(5):
             try:
@@ -1295,8 +1259,6 @@ def main():
     print(WHITE, end="")
 
     cleanup_old_update_files()
-    
-    # Run update check in background thread to avoid blocking GUI startup
     threading.Thread(target=check_for_updates, daemon=True).start()
 
     actions = {
