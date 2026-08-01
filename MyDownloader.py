@@ -9,7 +9,7 @@ Run with:  python downloader.py
 """
 
 # --- Configuration & Metadata ---
-VERSION = "2.2.8.2"
+VERSION = "2.4.8.4"
 CURRENT_VERSION = VERSION
 REPO_OWNER = "Y2m777a5"
 REPO_NAME = "My-Downloader"       
@@ -27,6 +27,7 @@ import json
 import threading
 import urllib.request
 import urllib.parse
+import concurrent.futures
 from pathlib import Path
 
 # Platform-specific imports for keyboard input and Win32 API calls
@@ -405,6 +406,7 @@ def download_batch_with_bar(urls: list[str], title: str, extra_args: list[str]):
             str(YTDLP),
             "--ffmpeg-location", str(BIN_DIR),
             "--no-colors",
+            "-N", "8",  # (Opens 8 threads for video/audio streams)
             *extra_args,
             "--newline",
             "--progress-template", "PG|%(progress._percent_str)s",
@@ -904,6 +906,124 @@ def action_install_update_menu():
             time.sleep(1)
 
 
+def download_chunk(url, start_byte, end_byte, part_num, temp_dir, ctx, progress_lock, progress_data):
+    """Downloads a specific byte range of the file into a temporary part file."""
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Range": f"bytes={start_byte}-{end_byte}"
+    }
+    req = urllib.request.Request(url, headers=headers)
+    part_file = temp_dir / f"part_{part_num}.tmp"
+    
+    with urllib.request.urlopen(req, context=ctx, timeout=30) as resp, open(part_file, "wb") as f:
+        while True:
+            chunk = resp.read(65536)
+            if not chunk:
+                break
+            f.write(chunk)
+            with progress_lock:
+                progress_data["downloaded"] += len(chunk)
+                
+    return part_file, start_byte
+
+
+def download_with_progress(url, dest_path, ctx, label="Downloading", num_threads=4, timeout=30):
+    """Multi-threaded downloader using HTTP Range requests with robust fallbacks."""
+    total = None
+    accept_ranges = False
+
+    # Safe probe using HEAD request to detect file size & range support
+    try:
+        req_head = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}, method="HEAD")
+        with urllib.request.urlopen(req_head, context=ctx, timeout=timeout) as resp:
+            content_length = resp.getheader("Content-Length")
+            ranges_header = resp.getheader("Accept-Ranges", "").lower()
+            if content_length:
+                total = int(content_length)
+            if ranges_header and ranges_header != "none":
+                accept_ranges = True
+    except Exception:
+        # Fallback cleanly if HEAD is rejected by CDN/GitHub
+        total = None
+        accept_ranges = False
+
+    # Fallback to single thread if server doesn't report size or range support
+    if not total or not accept_ranges or total < 1024 * 1024:  # Files < 1MB use 1 thread
+        num_threads = 1
+
+    chunk_size = total // num_threads if total else 0
+    ranges = []
+    
+    if num_threads > 1:
+        for i in range(num_threads):
+            start = i * chunk_size
+            end = total - 1 if i == num_threads - 1 else (start + chunk_size - 1)
+            ranges.append((start, end, i))
+
+    progress_data = {"downloaded": 0, "done": False}
+    progress_lock = threading.Lock()
+    temp_dir = Path(tempfile.mkdtemp())
+
+    def update_ui():
+        """Background loop for clean UI rendering."""
+        first_draw = True
+        while not progress_data["done"]:
+            mb = progress_data["downloaded"] / (1024 * 1024)
+            prefix = "" if first_draw else "\033[1A"
+            if total:
+                pct = min(100, progress_data["downloaded"] * 100 // total)
+                total_mb = total / (1024 * 1024)
+                sys.stdout.write(f"{prefix}\r\033[K{CYAN}{label}: {mb:6.1f} / {total_mb:.1f} MB ({pct}%){WHITE}   \n")
+            else:
+                sys.stdout.write(f"{prefix}\r\033[K{CYAN}{label}: {mb:6.1f} MB{WHITE}   \n")
+            sys.stdout.flush()
+            first_draw = False
+            time.sleep(0.1)
+
+    ui_thread = threading.Thread(target=update_ui, daemon=True)
+    ui_thread.start()
+
+    try:
+        if num_threads > 1:
+            # Parallel Multi-Thread Download
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+                futures = [
+                    executor.submit(download_chunk, url, r[0], r[1], r[2], temp_dir, ctx, progress_lock, progress_data)
+                    for r in ranges
+                ]
+                results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+            # Assemble chunks back into final file in correct order
+            results.sort(key=lambda x: x[1])
+            with open(dest_path, "wb") as final_file:
+                for part_path, _ in results:
+                    with open(part_path, "rb") as pf:
+                        shutil.copyfileobj(pf, final_file)
+                    part_path.unlink(missing_ok=True)
+        else:
+            # Standard Single-Thread Fallback
+            req_get = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req_get, context=ctx, timeout=timeout) as resp, open(dest_path, "wb") as f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    with progress_lock:
+                        progress_data["downloaded"] += len(chunk)
+
+    finally:
+        progress_data["done"] = True
+        ui_thread.join(timeout=1.0)  # Cleanly stop UI thread before proceeding
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    # Output final progress confirmation line
+    if total:
+        total_mb = total / (1024 * 1024)
+        sys.stdout.write(f"\033[1A\r\033[K{CYAN}{label}: {total_mb:.1f} / {total_mb:.1f} MB (100%){WHITE}   \n")
+        sys.stdout.flush()
+
+
 def action_update_ytdlp():
     """Downloads latest yt-dlp executable directly from GitHub releases."""
     clear()
@@ -917,10 +1037,8 @@ def action_update_ytdlp():
     url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" if os.name == "nt" else "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
     try:
         BIN_DIR.mkdir(parents=True, exist_ok=True)
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         ctx = create_secure_ssl_context()
-        with urllib.request.urlopen(req, context=ctx) as resp, open(YTDLP, "wb") as f:
-            shutil.copyfileobj(resp, f)
+        download_with_progress(url, YTDLP, ctx, label="Downloading yt-dlp")
         if os.name != "nt":
             YTDLP.chmod(0o755)
         print()
@@ -951,10 +1069,8 @@ def action_update_ffmpeg():
     url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
     try:
         BIN_DIR.mkdir(parents=True, exist_ok=True)
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         ctx = create_secure_ssl_context()
-        with urllib.request.urlopen(req, context=ctx) as resp, open(zip_path, "wb") as f:
-            shutil.copyfileobj(resp, f)
+        download_with_progress(url, zip_path, ctx, label="Downloading FFmpeg")
 
         if extract_dir.exists():
             shutil.rmtree(extract_dir)
@@ -1001,25 +1117,39 @@ def action_update():
     print(f"{YELLOW}[INFO] Checking for latest release on GitHub...{WHITE}")
     print()
 
-    try:
-        print(f"{CYAN}[1/2] Finding latest release tag...")
-        tag = get_cached_release_tag(f"{REPO_OWNER}/{REPO_NAME}", force=True)
-        if tag in ("Unavailable", "No Release", "Rate Limited", "No Internet") or tag.startswith("HTTP "):
-            raise Exception(f"Could not determine latest release ({tag})")
+    api_url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
 
-        encoded_tag = urllib.parse.quote(tag)
-        encoded_name = urllib.parse.quote(GITHUB_EXE_FILENAME)
-        download_url = f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/download/{encoded_tag}/{encoded_name}"
+    try:
+        print(f"{CYAN}[1/2] Fetching release details from GitHub API...")
+        req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
+        ctx = create_secure_ssl_context()
+
+        with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+            release_data = json.loads(resp.read().decode())
+
+        # Look for the real asset by exact name first, then fall back to any .exe
+        download_url = None
+        for asset in release_data.get("assets", []):
+            asset_name = asset.get("name", "")
+            if asset_name.lower() == GITHUB_EXE_FILENAME.lower():
+                download_url = asset.get("browser_download_url")
+                break
+        if not download_url:
+            for asset in release_data.get("assets", []):
+                if asset.get("name", "").lower().endswith(".exe"):
+                    download_url = asset.get("browser_download_url")
+                    break
+
+        if not download_url:
+            raise Exception(
+                "No .exe asset found attached to the latest GitHub release. "
+                "Make sure the release has a compiled .exe uploaded to it."
+            )
 
         print(f"{CYAN}[2/2] Downloading latest binary...")
-        req_dl = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0"})
-        ctx = create_secure_ssl_context()
-        
         base_folder = get_base_dir()
         temp_exe = base_folder / "My_Downloader_temp.exe"
-        
-        with urllib.request.urlopen(req_dl, context=ctx) as resp, open(temp_exe, "wb") as f:
-            shutil.copyfileobj(resp, f)
+        download_with_progress(download_url, temp_exe, ctx, label="Downloading update")
 
         print()
         print(f"{GREEN}[SUCCESS] Download complete!{WHITE}")
@@ -1037,9 +1167,17 @@ def action_update():
 
         temp_exe.rename(target_exe)
         
-        # Spawn replacement process and terminate current instance
+        # Spawn replacement process and terminate current instance.
+        # IMPORTANT: on Windows this must go through explorer.exe as a
+        # separate subprocess, NOT os.startfile(). os.startfile() calls
+        # ShellExecuteEx synchronously in THIS process, which can block for
+        # several seconds while Windows runs a reputation check on the
+        # freshly created exe before returning control -- making the old
+        # process appear to "hang" for 5-6s before it can reach os._exit().
+        # subprocess.Popen(["explorer.exe", ...]) returns immediately, so
+        # any such check happens inside explorer.exe's own process instead.
         if os.name == "nt":
-            os.startfile(str(target_exe.resolve()))
+            subprocess.Popen(["explorer.exe", str(target_exe.resolve())])
         else:
             subprocess.Popen([str(target_exe.resolve())])
         os._exit(0)
